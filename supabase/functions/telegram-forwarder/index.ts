@@ -13,8 +13,9 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Store configuration in memory (for demo - in production use database)
+// Store configuration in memory
 let botConfig: { sourceChannel: string; destChannel: string } | null = null;
+let stopForwarding = false; // Stop flag for bulk forward
 
 async function sendTelegramRequest(method: string, params: Record<string, unknown>) {
   console.log(`Calling Telegram API: ${method}`, params);
@@ -183,7 +184,8 @@ async function bulkForward(
   destChannel: string, 
   startId: number, 
   endId: number
-): Promise<{ success: number; failed: number; skipped: number; total: number }> {
+): Promise<{ success: number; failed: number; skipped: number; total: number; stopped: boolean }> {
+  stopForwarding = false; // Reset stop flag
   const messageIds: number[] = [];
   
   // Generate message IDs from start to end
@@ -213,6 +215,12 @@ async function bulkForward(
   
   // Process batches in parallel groups
   for (let i = 0; i < batches.length; i += parallelBatches) {
+    // Check stop flag
+    if (stopForwarding) {
+      console.log('Forwarding stopped by user');
+      return { success, failed, skipped, total, stopped: true };
+    }
+    
     const parallelGroup = batches.slice(i, i + parallelBatches);
     console.log(`Processing parallel group ${Math.floor(i / parallelBatches) + 1}: batches ${i + 1} to ${Math.min(i + parallelBatches, batches.length)}`);
     
@@ -247,7 +255,7 @@ async function bulkForward(
     }
   }
   
-  return { success, failed, skipped, total };
+  return { success, failed, skipped, total, stopped: false };
 }
 
 serve(async (req) => {
@@ -346,6 +354,14 @@ serve(async (req) => {
             configured: !!botConfig,
             config: botConfig 
           }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+
+      case 'stop':
+        stopForwarding = true;
+        console.log('Stop signal received');
+        return new Response(
+          JSON.stringify({ success: true, message: 'Stop signal sent' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
 

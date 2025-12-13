@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Rocket, Loader2, CheckCircle, AlertCircle } from "lucide-react";
+import { Rocket, Loader2, CheckCircle, AlertCircle, StopCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,19 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
   const [startId, setStartId] = useState("");
   const [endId, setEndId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState<{ success: number; failed: number; skipped: number; total: number } | null>(null);
+  const [result, setResult] = useState<{ success: number; failed: number; skipped: number; total: number; stopped?: boolean } | null>(null);
+
+  const handleStop = async () => {
+    try {
+      await supabase.functions.invoke('telegram-forwarder', {
+        body: { action: 'stop' },
+      });
+      toast.info("Stop signal sent - forwarding will stop after current batch");
+    } catch (error) {
+      console.error('Stop error:', error);
+      toast.error("Failed to send stop signal");
+    }
+  };
 
   const handleBulkForward = async () => {
     if (!startId || !endId) {
@@ -57,6 +69,10 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
       if (error) throw error;
 
       setResult(data);
+      
+      if (data.stopped) {
+        toast.info("Forwarding stopped by user");
+      }
       
       if (data.skipped > 0) {
         toast.info(`${data.skipped} files skipped (already forwarded)`);
@@ -122,23 +138,35 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
           💡 Message ID kaise nikale: Channel mein message ka link copy karo, last number = message ID
         </p>
 
-        <Button
-          onClick={handleBulkForward}
-          disabled={isLoading || !sourceChannel || !destChannel}
-          className="w-full bg-primary hover:bg-primary/90"
-        >
-          {isLoading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Forwarding...
-            </>
-          ) : (
-            <>
-              <Rocket className="mr-2 h-4 w-4" />
-              Start Bulk Forward
-            </>
+        <div className="flex gap-2">
+          <Button
+            onClick={handleBulkForward}
+            disabled={isLoading || !sourceChannel || !destChannel}
+            className="flex-1 bg-primary hover:bg-primary/90"
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Forwarding...
+              </>
+            ) : (
+              <>
+                <Rocket className="mr-2 h-4 w-4" />
+                Start Bulk Forward
+              </>
+            )}
+          </Button>
+          
+          {isLoading && (
+            <Button
+              onClick={handleStop}
+              variant="destructive"
+              className="px-4"
+            >
+              <StopCircle className="h-4 w-4" />
+            </Button>
           )}
-        </Button>
+        </div>
 
         {result && (
           <div className="rounded-lg border border-border/50 bg-background/50 p-4 space-y-2">
