@@ -1,19 +1,53 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Send, Bot, Sparkles } from "lucide-react";
 import { BotConfig } from "@/components/BotConfig";
 import { StatusCard } from "@/components/StatusCard";
 import { ActivityLog } from "@/components/ActivityLog";
 import { BulkForward } from "@/components/BulkForward";
+import { supabase } from "@/integrations/supabase/client";
 
 const Index = () => {
   const [isConfigured, setIsConfigured] = useState(false);
   const [config, setConfig] = useState<{ sourceChannel: string; destChannel: string } | null>(null);
+  const [filesForwarded, setFilesForwarded] = useState(0);
+  const [lastActivity, setLastActivity] = useState<string | null>(null);
   const [logs, setLogs] = useState<Array<{
     id: string;
     fileName: string;
     timestamp: string;
     status: "success" | "pending" | "failed";
   }>>([]);
+
+  // Fetch forwarded files count from database
+  const fetchForwardedCount = async () => {
+    const { count, error } = await supabase
+      .from('forwarded_messages')
+      .select('*', { count: 'exact', head: true });
+    
+    if (!error && count !== null) {
+      setFilesForwarded(count);
+    }
+
+    // Get last activity
+    const { data } = await supabase
+      .from('forwarded_messages')
+      .select('forwarded_at')
+      .order('forwarded_at', { ascending: false })
+      .limit(1);
+    
+    if (data && data.length > 0) {
+      const date = new Date(data[0].forwarded_at);
+      setLastActivity(date.toLocaleString());
+    }
+  };
+
+  useEffect(() => {
+    fetchForwardedCount();
+    
+    // Refresh count every 5 seconds
+    const interval = setInterval(fetchForwardedCount, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleConfigSaved = (newConfig: { sourceChannel: string; destChannel: string }) => {
     setConfig(newConfig);
@@ -58,8 +92,8 @@ const Index = () => {
         <div className="mb-8">
           <StatusCard
             status={isConfigured ? "online" : "configuring"}
-            filesForwarded={logs.length}
-            lastActivity={logs[0]?.timestamp || null}
+            filesForwarded={filesForwarded}
+            lastActivity={lastActivity}
           />
         </div>
 
