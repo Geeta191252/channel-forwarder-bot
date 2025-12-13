@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { Rocket, Loader2, CheckCircle, AlertCircle, StopCircle } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Rocket, Loader2, CheckCircle, AlertCircle, StopCircle, Zap, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -12,11 +13,67 @@ interface BulkForwardProps {
   destChannel: string;
 }
 
+interface LiveProgress {
+  isRunning: boolean;
+  success: number;
+  failed: number;
+  skipped: number;
+  total: number;
+  rateLimitHits: number;
+  currentBatch: number;
+  totalBatches: number;
+  elapsedSeconds: number;
+  speedPerMinute: number;
+}
+
+interface FinalResult {
+  success: number;
+  failed: number;
+  skipped: number;
+  total: number;
+  stopped?: boolean;
+  rateLimitHits?: number;
+}
+
 export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
   const [startId, setStartId] = useState("");
   const [endId, setEndId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState<{ success: number; failed: number; skipped: number; total: number; stopped?: boolean } | null>(null);
+  const [result, setResult] = useState<FinalResult | null>(null);
+  const [liveProgress, setLiveProgress] = useState<LiveProgress | null>(null);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Poll for progress while loading
+  useEffect(() => {
+    if (isLoading) {
+      const pollProgress = async () => {
+        try {
+          const { data } = await supabase.functions.invoke('telegram-forwarder', {
+            body: { action: 'progress' },
+          });
+          if (data) {
+            setLiveProgress(data);
+          }
+        } catch (error) {
+          console.error('Progress poll error:', error);
+        }
+      };
+
+      // Poll every 500ms
+      pollingRef.current = setInterval(pollProgress, 500);
+      pollProgress(); // Initial poll
+
+      return () => {
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+        }
+      };
+    } else {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    }
+  }, [isLoading]);
 
   const handleStop = async () => {
     try {
@@ -54,6 +111,7 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
 
     setIsLoading(true);
     setResult(null);
+    setLiveProgress(null);
 
     try {
       const { data, error } = await supabase.functions.invoke('telegram-forwarder', {
@@ -69,6 +127,7 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
       if (error) throw error;
 
       setResult(data);
+      setLiveProgress(null);
       
       if (data.stopped) {
         toast.info("Forwarding stopped by user");
@@ -92,6 +151,10 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
       setIsLoading(false);
     }
   };
+
+  const progressPercent = liveProgress && liveProgress.total > 0 
+    ? Math.round((liveProgress.success + liveProgress.failed) / liveProgress.total * 100)
+    : 0;
 
   return (
     <Card className="bg-gradient-card border-border/50 shadow-card animate-slide-up" style={{ animationDelay: "0.3s" }}>
@@ -168,7 +231,59 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
           )}
         </div>
 
-        {result && (
+        {/* Live Progress Panel */}
+        {isLoading && liveProgress && (
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3 animate-pulse-slow">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                Live Progress
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {progressPercent}%
+              </span>
+            </div>
+            
+            <Progress value={progressPercent} className="h-2" />
+            
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="flex items-center gap-2">
+                <Zap className="h-4 w-4 text-yellow-500" />
+                <span className="text-muted-foreground">Speed:</span>
+                <span className="font-bold text-primary">{liveProgress.speedPerMinute.toLocaleString()}/min</span>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-orange-500" />
+                <span className="text-muted-foreground">Rate Limits:</span>
+                <span className="font-bold text-orange-500">{liveProgress.rateLimitHits}</span>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="text-center p-2 rounded bg-success/10">
+                <p className="text-success font-bold text-lg">{liveProgress.success.toLocaleString()}</p>
+                <p className="text-muted-foreground">Success</p>
+              </div>
+              <div className="text-center p-2 rounded bg-destructive/10">
+                <p className="text-destructive font-bold text-lg">{liveProgress.failed.toLocaleString()}</p>
+                <p className="text-muted-foreground">Failed</p>
+              </div>
+              <div className="text-center p-2 rounded bg-muted/30">
+                <p className="text-foreground font-bold text-lg">{liveProgress.total.toLocaleString()}</p>
+                <p className="text-muted-foreground">Total</p>
+              </div>
+            </div>
+            
+            <div className="text-xs text-muted-foreground text-center">
+              Batch {liveProgress.currentBatch}/{liveProgress.totalBatches} • 
+              Time: {Math.floor(liveProgress.elapsedSeconds / 60)}m {liveProgress.elapsedSeconds % 60}s
+            </div>
+          </div>
+        )}
+
+        {/* Final Results */}
+        {result && !isLoading && (
           <div className="rounded-lg border border-border/50 bg-background/50 p-4 space-y-2">
             <div className="flex items-center gap-2">
               {result.failed === 0 ? (
@@ -176,7 +291,12 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
               ) : (
                 <AlertCircle className="h-5 w-5 text-warning" />
               )}
-              <span className="font-medium">Results</span>
+              <span className="font-medium">Final Results</span>
+              {result.rateLimitHits !== undefined && result.rateLimitHits > 0 && (
+                <span className="text-xs text-orange-500 ml-auto">
+                  ⚠️ {result.rateLimitHits} rate limits hit
+                </span>
+              )}
             </div>
             <div className="grid grid-cols-4 gap-2 text-sm">
               <div className="text-center p-2 rounded bg-success/10">

@@ -15,7 +15,20 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Store configuration in memory
 let botConfig: { sourceChannel: string; destChannel: string } | null = null;
-let stopForwarding = false; // Stop flag for bulk forward
+let stopForwarding = false;
+
+// Live progress tracking
+let liveProgress = {
+  isRunning: false,
+  success: 0,
+  failed: 0,
+  skipped: 0,
+  total: 0,
+  rateLimitHits: 0,
+  startTime: 0,
+  currentBatch: 0,
+  totalBatches: 0,
+};
 
 async function sendTelegramRequest(method: string, params: Record<string, unknown>) {
   console.log(`Calling Telegram API: ${method}`, params);
@@ -198,8 +211,9 @@ async function copyMessagesWithRetry(
     
     // Rate limited - wait and retry
     if (result.error_code === 429) {
+      liveProgress.rateLimitHits++;
       const waitTime = (result.parameters?.retry_after || 5) * 1000;
-      console.log(`Rate limited, waiting ${waitTime/1000}s...`);
+      console.log(`Rate limited (${liveProgress.rateLimitHits} total), waiting ${waitTime/1000}s...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
       continue;
     }
@@ -216,13 +230,23 @@ async function bulkForward(
   destChannel: string, 
   startId: number, 
   endId: number
-): Promise<{ success: number; failed: number; skipped: number; total: number; stopped: boolean }> {
+): Promise<{ success: number; failed: number; skipped: number; total: number; stopped: boolean; rateLimitHits: number }> {
   stopForwarding = false;
   
   const total = endId - startId + 1;
-  let success = 0;
-  let failed = 0;
-  const skipped = 0;
+  
+  // Reset and init live progress
+  liveProgress = {
+    isRunning: true,
+    success: 0,
+    failed: 0,
+    skipped: 0,
+    total,
+    rateLimitHits: 0,
+    startTime: Date.now(),
+    currentBatch: 0,
+    totalBatches: 0,
+  };
   
   console.log(`Forwarding ${total} messages at max speed`);
   
@@ -240,15 +264,25 @@ async function bulkForward(
     batches.push(batch);
   }
   
+  liveProgress.totalBatches = batches.length;
   console.log(`Total batches: ${batches.length}, processing ${parallelBatches} in parallel`);
   
   // Process all batches in parallel groups
   for (let i = 0; i < batches.length; i += parallelBatches) {
     if (stopForwarding) {
       console.log('Stopped by user');
-      return { success, failed, skipped, total, stopped: true };
+      liveProgress.isRunning = false;
+      return { 
+        success: liveProgress.success, 
+        failed: liveProgress.failed, 
+        skipped: liveProgress.skipped, 
+        total, 
+        stopped: true,
+        rateLimitHits: liveProgress.rateLimitHits
+      };
     }
     
+    liveProgress.currentBatch = Math.min(i + parallelBatches, batches.length);
     const group = batches.slice(i, i + parallelBatches);
     console.log(`Group ${Math.floor(i / parallelBatches) + 1}/${Math.ceil(batches.length / parallelBatches)}`);
     
@@ -265,15 +299,20 @@ async function bulkForward(
     );
     
     for (const r of results) {
-      success += r.success;
-      failed += r.failed;
+      liveProgress.success += r.success;
+      liveProgress.failed += r.failed;
     }
-    
-    // No delay - maximum speed
-    // Rate limit is handled by copyMessagesWithRetry
   }
   
-  return { success, failed, skipped, total, stopped: false };
+  liveProgress.isRunning = false;
+  return { 
+    success: liveProgress.success, 
+    failed: liveProgress.failed, 
+    skipped: liveProgress.skipped, 
+    total, 
+    stopped: false,
+    rateLimitHits: liveProgress.rateLimitHits
+  };
 }
 
 serve(async (req) => {
@@ -371,6 +410,20 @@ serve(async (req) => {
           JSON.stringify({ 
             configured: !!botConfig,
             config: botConfig 
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+
+      case 'progress':
+        const elapsedMs = liveProgress.startTime ? Date.now() - liveProgress.startTime : 0;
+        const elapsedSec = elapsedMs / 1000;
+        const speed = elapsedSec > 0 ? Math.round(liveProgress.success / elapsedSec * 60) : 0;
+        
+        return new Response(
+          JSON.stringify({
+            ...liveProgress,
+            elapsedSeconds: Math.round(elapsedSec),
+            speedPerMinute: speed,
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
