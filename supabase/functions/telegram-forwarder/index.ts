@@ -228,7 +228,7 @@ async function bulkForward(
   
   // Telegram limit: 100 messages per copyMessages call
   const batchSize = 100;
-  const parallelBatches = 30; // Aggressive: 30 parallel requests
+  const parallelBatches = 50; // Maximum: 50 parallel requests = 5000 msgs/cycle
   
   // Create all batches
   const batches: number[][] = [];
@@ -269,10 +269,8 @@ async function bulkForward(
       failed += r.failed;
     }
     
-    // Minimal delay between groups
-    if (i + parallelBatches < batches.length) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
+    // No delay - maximum speed
+    // Rate limit is handled by copyMessagesWithRetry
   }
   
   return { success, failed, skipped, total, stopped: false };
