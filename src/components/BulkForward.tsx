@@ -38,10 +38,7 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
     }
 
     const totalMessages = end - start + 1;
-    if (totalMessages > 5000) {
-      toast.error("Maximum 5000 messages at a time");
-      return;
-    }
+    toast.info(`Starting to forward ${totalMessages.toLocaleString()} messages...`);
 
     setIsLoading(true);
     setResult(null);
