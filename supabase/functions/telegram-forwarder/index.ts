@@ -134,7 +134,7 @@ async function bulkForward(
   
   // Process in batches of 100
   const batchSize = 100;
-  const parallelBatches = 10; // Run 10 batches in parallel
+  const parallelBatches = 50; // Run 50 batches in parallel (5000 messages at once)
   
   // Create all batches
   const batches: number[][] = [];
@@ -172,9 +172,9 @@ async function bulkForward(
       failed += r.failed;
     }
     
-    // Small delay between parallel groups
+    // Minimal delay to avoid rate limit ban
     if (i + parallelBatches < batches.length) {
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise(resolve => setTimeout(resolve, 10));
     }
   }
   
