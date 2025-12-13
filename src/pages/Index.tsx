@@ -3,6 +3,7 @@ import { Send, Bot, Sparkles } from "lucide-react";
 import { BotConfig } from "@/components/BotConfig";
 import { StatusCard } from "@/components/StatusCard";
 import { ActivityLog } from "@/components/ActivityLog";
+import { BulkForward } from "@/components/BulkForward";
 
 const Index = () => {
   const [isConfigured, setIsConfigured] = useState(false);
@@ -64,7 +65,15 @@ const Index = () => {
 
         {/* Main Content Grid */}
         <div className="grid gap-8 lg:grid-cols-2">
-          <BotConfig onConfigSaved={handleConfigSaved} />
+          <div className="space-y-8">
+            <BotConfig onConfigSaved={handleConfigSaved} />
+            {config && (
+              <BulkForward 
+                sourceChannel={config.sourceChannel} 
+                destChannel={config.destChannel} 
+              />
+            )}
+          </div>
           <ActivityLog logs={logs} />
         </div>
 
