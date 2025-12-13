@@ -114,7 +114,7 @@ async function getWebhookInfo() {
   return sendTelegramRequest('getWebhookInfo', {});
 }
 
-// Bulk forward messages in batches of 100
+// Bulk forward messages in batches of 100, with parallel processing
 async function bulkForward(
   sourceChannel: string, 
   destChannel: string, 
@@ -134,28 +134,47 @@ async function bulkForward(
   
   // Process in batches of 100
   const batchSize = 100;
+  const parallelBatches = 10; // Run 10 batches in parallel
   
+  // Create all batches
+  const batches: number[][] = [];
   for (let i = 0; i < messageIds.length; i += batchSize) {
-    const batch = messageIds.slice(i, i + batchSize);
-    console.log(`Processing batch ${Math.floor(i / batchSize) + 1}: messages ${batch[0]} to ${batch[batch.length - 1]}`);
+    batches.push(messageIds.slice(i, i + batchSize));
+  }
+  
+  console.log(`Total batches: ${batches.length}, processing ${parallelBatches} in parallel`);
+  
+  // Process batches in parallel groups
+  for (let i = 0; i < batches.length; i += parallelBatches) {
+    const parallelGroup = batches.slice(i, i + parallelBatches);
+    console.log(`Processing parallel group ${Math.floor(i / parallelBatches) + 1}: batches ${i + 1} to ${Math.min(i + parallelBatches, batches.length)}`);
     
-    try {
-      const result = await copyMessages(sourceChannel, destChannel, batch);
-      
-      if (result.ok) {
-        success += batch.length;
-      } else {
-        console.log('Batch failed:', result);
-        failed += batch.length;
-      }
-    } catch (error) {
-      console.error('Batch error:', error);
-      failed += batch.length;
+    const results = await Promise.all(
+      parallelGroup.map(async (batch, idx) => {
+        try {
+          const result = await copyMessages(sourceChannel, destChannel, batch);
+          if (result.ok) {
+            return { success: batch.length, failed: 0 };
+          } else {
+            console.log(`Batch ${i + idx + 1} failed:`, result.description || result);
+            return { success: 0, failed: batch.length };
+          }
+        } catch (error) {
+          console.error(`Batch ${i + idx + 1} error:`, error);
+          return { success: 0, failed: batch.length };
+        }
+      })
+    );
+    
+    // Aggregate results
+    for (const r of results) {
+      success += r.success;
+      failed += r.failed;
     }
     
-    // Small delay between batches to avoid rate limiting
-    if (i + batchSize < messageIds.length) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+    // Small delay between parallel groups
+    if (i + parallelBatches < batches.length) {
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
   
