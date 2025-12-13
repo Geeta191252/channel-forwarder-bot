@@ -34,6 +34,15 @@ async function forwardMessage(fromChatId: string, toChatId: string, messageId: n
   });
 }
 
+// Batch forward up to 100 messages at once
+async function copyMessages(fromChatId: string, toChatId: string, messageIds: number[]) {
+  return sendTelegramRequest('copyMessages', {
+    chat_id: toChatId,
+    from_chat_id: fromChatId,
+    message_ids: messageIds,
+  });
+}
+
 interface TelegramMessage {
   message_id: number;
   chat?: { id: number };
@@ -105,6 +114,54 @@ async function getWebhookInfo() {
   return sendTelegramRequest('getWebhookInfo', {});
 }
 
+// Bulk forward messages in batches of 100
+async function bulkForward(
+  sourceChannel: string, 
+  destChannel: string, 
+  startId: number, 
+  endId: number
+): Promise<{ success: number; failed: number; total: number }> {
+  const messageIds: number[] = [];
+  
+  // Generate message IDs from start to end
+  for (let i = startId; i <= endId; i++) {
+    messageIds.push(i);
+  }
+  
+  const total = messageIds.length;
+  let success = 0;
+  let failed = 0;
+  
+  // Process in batches of 100
+  const batchSize = 100;
+  
+  for (let i = 0; i < messageIds.length; i += batchSize) {
+    const batch = messageIds.slice(i, i + batchSize);
+    console.log(`Processing batch ${Math.floor(i / batchSize) + 1}: messages ${batch[0]} to ${batch[batch.length - 1]}`);
+    
+    try {
+      const result = await copyMessages(sourceChannel, destChannel, batch);
+      
+      if (result.ok) {
+        success += batch.length;
+      } else {
+        console.log('Batch failed:', result);
+        failed += batch.length;
+      }
+    } catch (error) {
+      console.error('Batch error:', error);
+      failed += batch.length;
+    }
+    
+    // Small delay between batches to avoid rate limiting
+    if (i + batchSize < messageIds.length) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+  
+  return { success, failed, total };
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -125,9 +182,9 @@ serve(async (req) => {
 
     // Handle configuration and other requests
     const body = await req.json();
-    const { action, sourceChannel, destChannel, webhookUrl } = body;
+    const { action, sourceChannel, destChannel, webhookUrl, startMessageId, endMessageId } = body;
 
-    console.log('Received action:', action, { sourceChannel, destChannel });
+    console.log('Received action:', action, { sourceChannel, destChannel, startMessageId, endMessageId });
 
     switch (action) {
       case 'configure':
@@ -146,6 +203,30 @@ serve(async (req) => {
             success: true, 
             message: 'Bot configured successfully',
             config: botConfig 
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+
+      case 'bulk-forward':
+        if (!sourceChannel || !destChannel || !startMessageId || !endMessageId) {
+          return new Response(
+            JSON.stringify({ error: 'Missing parameters for bulk forward' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        
+        console.log(`Starting bulk forward: ${startMessageId} to ${endMessageId}`);
+        const bulkResult = await bulkForward(
+          sourceChannel, 
+          destChannel, 
+          Number(startMessageId), 
+          Number(endMessageId)
+        );
+        
+        return new Response(
+          JSON.stringify({ 
+            ok: true, 
+            ...bulkResult
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
