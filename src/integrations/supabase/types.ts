@@ -14,7 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      forwarded_messages: {
+        Row: {
+          dest_channel: string
+          forwarded_at: string
+          id: string
+          source_channel: string
+          source_message_id: number
+        }
+        Insert: {
+          dest_channel: string
+          forwarded_at?: string
+          id?: string
+          source_channel: string
+          source_message_id: number
+        }
+        Update: {
+          dest_channel?: string
+          forwarded_at?: string
+          id?: string
+          source_channel?: string
+          source_message_id?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

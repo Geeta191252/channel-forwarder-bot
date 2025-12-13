@@ -16,7 +16,7 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
   const [startId, setStartId] = useState("");
   const [endId, setEndId] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState<{ success: number; failed: number; total: number } | null>(null);
+  const [result, setResult] = useState<{ success: number; failed: number; skipped: number; total: number } | null>(null);
 
   const handleBulkForward = async () => {
     if (!startId || !endId) {
@@ -57,6 +57,10 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
       if (error) throw error;
 
       setResult(data);
+      
+      if (data.skipped > 0) {
+        toast.info(`${data.skipped} files skipped (already forwarded)`);
+      }
       
       if (data.success > 0) {
         toast.success(`${data.success} files forwarded successfully!`);
@@ -146,10 +150,14 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
               )}
               <span className="font-medium">Results</span>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-sm">
+            <div className="grid grid-cols-4 gap-2 text-sm">
               <div className="text-center p-2 rounded bg-success/10">
                 <p className="text-success font-bold">{result.success}</p>
                 <p className="text-muted-foreground text-xs">Success</p>
+              </div>
+              <div className="text-center p-2 rounded bg-blue-500/10">
+                <p className="text-blue-500 font-bold">{result.skipped}</p>
+                <p className="text-muted-foreground text-xs">Skipped</p>
               </div>
               <div className="text-center p-2 rounded bg-destructive/10">
                 <p className="text-destructive font-bold">{result.failed}</p>

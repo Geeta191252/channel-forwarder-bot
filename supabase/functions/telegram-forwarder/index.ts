@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -7,6 +8,10 @@ const corsHeaders = {
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Store configuration in memory (for demo - in production use database)
 let botConfig: { sourceChannel: string; destChannel: string } | null = null;
@@ -41,6 +46,48 @@ async function copyMessages(fromChatId: string, toChatId: string, messageIds: nu
     from_chat_id: fromChatId,
     message_ids: messageIds,
   });
+}
+
+// Get already forwarded message IDs from database
+async function getForwardedMessageIds(
+  sourceChannel: string, 
+  destChannel: string, 
+  messageIds: number[]
+): Promise<Set<number>> {
+  const { data, error } = await supabase
+    .from('forwarded_messages')
+    .select('source_message_id')
+    .eq('source_channel', sourceChannel)
+    .eq('dest_channel', destChannel)
+    .in('source_message_id', messageIds);
+  
+  if (error) {
+    console.error('Error fetching forwarded messages:', error);
+    return new Set();
+  }
+  
+  return new Set(data?.map(row => row.source_message_id) || []);
+}
+
+// Save forwarded message IDs to database
+async function saveForwardedMessageIds(
+  sourceChannel: string, 
+  destChannel: string, 
+  messageIds: number[]
+): Promise<void> {
+  const records = messageIds.map(id => ({
+    source_channel: sourceChannel,
+    dest_channel: destChannel,
+    source_message_id: id,
+  }));
+  
+  const { error } = await supabase
+    .from('forwarded_messages')
+    .upsert(records, { onConflict: 'source_channel,dest_channel,source_message_id' });
+  
+  if (error) {
+    console.error('Error saving forwarded messages:', error);
+  }
 }
 
 interface TelegramMessage {
@@ -90,8 +137,24 @@ async function handleWebhook(update: TelegramUpdate) {
                   message.animation || message.sticker;
 
   if (hasFile) {
+    // Check if already forwarded
+    const alreadyForwarded = await getForwardedMessageIds(
+      botConfig.sourceChannel, 
+      botConfig.destChannel, 
+      [messageId]
+    );
+    
+    if (alreadyForwarded.has(messageId)) {
+      console.log(`Message ${messageId} already forwarded, skipping`);
+      return { ok: true, skipped: true, message: 'Already forwarded' };
+    }
+    
     console.log(`Forwarding file from ${botConfig.sourceChannel} to ${botConfig.destChannel}`);
     const result = await forwardMessage(botConfig.sourceChannel, botConfig.destChannel, messageId);
+    
+    if (result.ok) {
+      await saveForwardedMessageIds(botConfig.sourceChannel, botConfig.destChannel, [messageId]);
+    }
     
     return { 
       ok: result.ok, 
@@ -120,15 +183,35 @@ async function bulkForward(
   destChannel: string, 
   startId: number, 
   endId: number
-): Promise<{ success: number; failed: number; total: number }> {
-  const messageIds: number[] = [];
+): Promise<{ success: number; failed: number; skipped: number; total: number }> {
+  const allMessageIds: number[] = [];
   
   // Generate message IDs from start to end
   for (let i = startId; i <= endId; i++) {
-    messageIds.push(i);
+    allMessageIds.push(i);
   }
   
-  const total = messageIds.length;
+  const total = allMessageIds.length;
+  console.log(`Checking ${total} messages for already forwarded...`);
+  
+  // Check which messages are already forwarded (in chunks of 1000)
+  const alreadyForwarded = new Set<number>();
+  for (let i = 0; i < allMessageIds.length; i += 1000) {
+    const chunk = allMessageIds.slice(i, i + 1000);
+    const forwarded = await getForwardedMessageIds(sourceChannel, destChannel, chunk);
+    forwarded.forEach(id => alreadyForwarded.add(id));
+  }
+  
+  // Filter out already forwarded messages
+  const messageIds = allMessageIds.filter(id => !alreadyForwarded.has(id));
+  const skipped = alreadyForwarded.size;
+  
+  console.log(`Skipping ${skipped} already forwarded messages, forwarding ${messageIds.length} new messages`);
+  
+  if (messageIds.length === 0) {
+    return { success: 0, failed: 0, skipped, total };
+  }
+  
   let success = 0;
   let failed = 0;
   
@@ -154,6 +237,8 @@ async function bulkForward(
         try {
           const result = await copyMessages(sourceChannel, destChannel, batch);
           if (result.ok) {
+            // Save successfully forwarded messages
+            await saveForwardedMessageIds(sourceChannel, destChannel, batch);
             return { success: batch.length, failed: 0 };
           } else {
             console.log(`Batch ${i + idx + 1} failed:`, result.description || result);
@@ -178,7 +263,7 @@ async function bulkForward(
     }
   }
   
-  return { success, failed, total };
+  return { success, failed, skipped, total };
 }
 
 serve(async (req) => {
