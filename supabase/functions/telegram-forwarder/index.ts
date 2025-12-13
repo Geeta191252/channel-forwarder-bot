@@ -184,33 +184,17 @@ async function bulkForward(
   startId: number, 
   endId: number
 ): Promise<{ success: number; failed: number; skipped: number; total: number }> {
-  const allMessageIds: number[] = [];
+  const messageIds: number[] = [];
   
   // Generate message IDs from start to end
   for (let i = startId; i <= endId; i++) {
-    allMessageIds.push(i);
+    messageIds.push(i);
   }
   
-  const total = allMessageIds.length;
-  console.log(`Checking ${total} messages for already forwarded...`);
+  const total = messageIds.length;
+  const skipped = 0; // No skip check - forward all
   
-  // Check which messages are already forwarded (in chunks of 1000)
-  const alreadyForwarded = new Set<number>();
-  for (let i = 0; i < allMessageIds.length; i += 1000) {
-    const chunk = allMessageIds.slice(i, i + 1000);
-    const forwarded = await getForwardedMessageIds(sourceChannel, destChannel, chunk);
-    forwarded.forEach(id => alreadyForwarded.add(id));
-  }
-  
-  // Filter out already forwarded messages
-  const messageIds = allMessageIds.filter(id => !alreadyForwarded.has(id));
-  const skipped = alreadyForwarded.size;
-  
-  console.log(`Skipping ${skipped} already forwarded messages, forwarding ${messageIds.length} new messages`);
-  
-  if (messageIds.length === 0) {
-    return { success: 0, failed: 0, skipped, total };
-  }
+  console.log(`Forwarding ${total} messages (no skip check)`);
   
   let success = 0;
   let failed = 0;
