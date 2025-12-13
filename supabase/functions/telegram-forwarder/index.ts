@@ -178,80 +178,100 @@ async function getWebhookInfo() {
   return sendTelegramRequest('getWebhookInfo', {});
 }
 
-// Bulk forward messages in batches of 100, with parallel processing
+// Copy messages with retry on rate limit
+async function copyMessagesWithRetry(
+  fromChatId: string, 
+  toChatId: string, 
+  messageIds: number[],
+  maxRetries = 3
+): Promise<{ ok: boolean; count: number }> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const result = await sendTelegramRequest('copyMessages', {
+      chat_id: toChatId,
+      from_chat_id: fromChatId,
+      message_ids: messageIds,
+    });
+    
+    if (result.ok) {
+      return { ok: true, count: result.result?.length || messageIds.length };
+    }
+    
+    // Rate limited - wait and retry
+    if (result.error_code === 429) {
+      const waitTime = (result.parameters?.retry_after || 5) * 1000;
+      console.log(`Rate limited, waiting ${waitTime/1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      continue;
+    }
+    
+    // Other error - don't retry
+    return { ok: false, count: 0 };
+  }
+  return { ok: false, count: 0 };
+}
+
+// Bulk forward messages - maximum speed
 async function bulkForward(
   sourceChannel: string, 
   destChannel: string, 
   startId: number, 
   endId: number
 ): Promise<{ success: number; failed: number; skipped: number; total: number; stopped: boolean }> {
-  stopForwarding = false; // Reset stop flag
-  const messageIds: number[] = [];
+  stopForwarding = false;
   
-  // Generate message IDs from start to end
-  for (let i = startId; i <= endId; i++) {
-    messageIds.push(i);
-  }
-  
-  const total = messageIds.length;
-  const skipped = 0; // No skip check - forward all
-  
-  console.log(`Forwarding ${total} messages (no skip check)`);
-  
+  const total = endId - startId + 1;
   let success = 0;
   let failed = 0;
+  const skipped = 0;
   
-  // Process in batches of 100
+  console.log(`Forwarding ${total} messages at max speed`);
+  
+  // Telegram limit: 100 messages per copyMessages call
   const batchSize = 100;
-  const parallelBatches = 5; // Safe: 5 batches in parallel (500 messages at once)
+  const parallelBatches = 30; // Aggressive: 30 parallel requests
   
   // Create all batches
   const batches: number[][] = [];
-  for (let i = 0; i < messageIds.length; i += batchSize) {
-    batches.push(messageIds.slice(i, i + batchSize));
+  for (let i = startId; i <= endId; i += batchSize) {
+    const batch: number[] = [];
+    for (let j = i; j < Math.min(i + batchSize, endId + 1); j++) {
+      batch.push(j);
+    }
+    batches.push(batch);
   }
   
   console.log(`Total batches: ${batches.length}, processing ${parallelBatches} in parallel`);
   
-  // Process batches in parallel groups
+  // Process all batches in parallel groups
   for (let i = 0; i < batches.length; i += parallelBatches) {
-    // Check stop flag
     if (stopForwarding) {
-      console.log('Forwarding stopped by user');
+      console.log('Stopped by user');
       return { success, failed, skipped, total, stopped: true };
     }
     
-    const parallelGroup = batches.slice(i, i + parallelBatches);
-    console.log(`Processing parallel group ${Math.floor(i / parallelBatches) + 1}: batches ${i + 1} to ${Math.min(i + parallelBatches, batches.length)}`);
+    const group = batches.slice(i, i + parallelBatches);
+    console.log(`Group ${Math.floor(i / parallelBatches) + 1}/${Math.ceil(batches.length / parallelBatches)}`);
     
     const results = await Promise.all(
-      parallelGroup.map(async (batch, idx) => {
-        try {
-          const result = await copyMessages(sourceChannel, destChannel, batch);
-          if (result.ok) {
-            // Save successfully forwarded messages
-            await saveForwardedMessageIds(sourceChannel, destChannel, batch);
-            return { success: batch.length, failed: 0 };
-          } else {
-            console.log(`Batch ${i + idx + 1} failed:`, result.description || result);
-            return { success: 0, failed: batch.length };
-          }
-        } catch (error) {
-          console.error(`Batch ${i + idx + 1} error:`, error);
-          return { success: 0, failed: batch.length };
+      group.map(async (batch) => {
+        const result = await copyMessagesWithRetry(sourceChannel, destChannel, batch);
+        if (result.ok) {
+          // Save in background - don't wait
+          saveForwardedMessageIds(sourceChannel, destChannel, batch);
+          return { success: batch.length, failed: 0 };
         }
+        return { success: 0, failed: batch.length };
       })
     );
     
-    // Aggregate results
     for (const r of results) {
       success += r.success;
       failed += r.failed;
     }
     
-    // Safe delay to avoid rate limits
+    // Minimal delay between groups
     if (i + parallelBatches < batches.length) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
   
