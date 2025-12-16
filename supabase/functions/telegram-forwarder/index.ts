@@ -456,19 +456,18 @@ serve(async (req) => {
   }
 
   try {
-    const url = new URL(req.url);
+    // Handle configuration and other requests
+    const body = await req.json();
     
-    // Handle webhook updates from Telegram
-    if (req.method === 'POST' && url.pathname.includes('/webhook')) {
-      const update = await req.json();
-      const result = await handleWebhook(update);
+    // Check if this is a Telegram webhook update (has message or channel_post)
+    if (body.message || body.channel_post || body.update_id !== undefined) {
+      console.log('Handling Telegram webhook update');
+      const result = await handleWebhook(body);
       return new Response(JSON.stringify(result), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-
-    // Handle configuration and other requests
-    const body = await req.json();
+    
     const { action, sourceChannel, destChannel, webhookUrl, startMessageId, endMessageId } = body;
 
     console.log('Received action:', action, { sourceChannel, destChannel, startMessageId, endMessageId });
