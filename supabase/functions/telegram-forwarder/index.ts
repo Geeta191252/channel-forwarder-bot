@@ -296,13 +296,13 @@ ${statusText}`;
       }
       
       // Start forwarding in background
-      sendMessage(chatId, `🚀 Starting forward: ${startId} to ${endId} (${endId - startId + 1} messages)\n\n⚠️ Use /resume if it stops.`);
+      sendMessage(chatId, `🚀 Starting forward: ${startId} to ${endId} (${endId - startId + 1} messages)\n\n✨ Auto-resume enabled - will continue automatically!`);
       
       // Run async without waiting
       bulkForward(forwardConfig.sourceChannel, forwardConfig.destChannel, startId, endId, false)
         .then(result => {
           if (result.needsResume) {
-            sendMessage(chatId, `⏸️ Batch complete! Use /resume to continue.\n📊 Progress: ${result.success}/${result.total}`);
+            sendMessage(chatId, `⏸️ Batch done. Auto-resuming in ~1 min...\n📊 Progress: ${result.success}/${result.total}`);
           } else {
             sendMessage(chatId, `✅ Forwarding complete!\n📊 Success: ${result.success}\n❌ Failed: ${result.failed}`);
           }
@@ -331,7 +331,7 @@ ${statusText}`;
       bulkForward(resumeConfig.sourceChannel, resumeConfig.destChannel, existingProgress.start_id, existingProgress.end_id, true)
         .then(result => {
           if (result.needsResume) {
-            sendMessage(chatId, `⏸️ Batch complete! Use /resume to continue.\n📊 Progress: ${result.success}/${result.total}`);
+            sendMessage(chatId, `⏸️ Batch done. Auto-resuming in ~1 min...\n📊 Progress: ${result.success}/${result.total}`);
           } else {
             sendMessage(chatId, `✅ Forwarding complete!\n📊 Success: ${result.success}\n❌ Failed: ${result.failed}`);
           }
