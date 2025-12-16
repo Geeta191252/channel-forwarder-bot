@@ -161,6 +161,12 @@ async function sendMessage(chatId: string | number, text: string, replyMarkup?: 
   return sendTelegramRequest('sendMessage', params);
 }
 
+async function editMessageText(chatId: string | number, messageId: number, text: string, replyMarkup?: any) {
+  const params: any = { chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML' };
+  if (replyMarkup) params.reply_markup = replyMarkup;
+  return sendTelegramRequest('editMessageText', params);
+}
+
 async function copyMessages(fromChatId: string, toChatId: string, messageIds: number[]) {
   return sendTelegramRequest('copyMessages', {
     chat_id: toChatId,
@@ -316,6 +322,10 @@ async function handleCommand(chatId: number, text: string, message: any) {
     const percent = progress.total_count ? Math.round((progress.success_count / progress.total_count) * 100) : 0;
     const status = progress.is_active ? (progress.stop_requested ? '⏸️ Stopping' : '🔄 Running') : '✅ Complete';
     
+    const buttons = progress.is_active 
+      ? [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]]
+      : [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }]];
+    
     await sendMessage(chatId, 
       `📊 <b>Progress</b> ${status}\n\n` +
       `✅ Success: ${progress.success_count} / ${progress.total_count} (${percent}%)\n` +
@@ -323,7 +333,8 @@ async function handleCommand(chatId: number, text: string, message: any) {
       `⏭️ Skipped: ${progress.skipped_count}\n` +
       `⚡ Rate limits: ${progress.rate_limit_hits}\n` +
       `🚀 Speed: ${progress.speed} files/min\n` +
-      `📦 Batch: ${progress.current_batch} / ${progress.total_batches}`
+      `📦 Batch: ${progress.current_batch} / ${progress.total_batches}`,
+      { inline_keyboard: buttons }
     );
   }
   
@@ -694,6 +705,32 @@ async function handleCallbackQuery(callbackQuery: any) {
   }
   else if (data === 'progress') {
     await handleCommand(chatId, '/progress', null);
+  }
+  else if (data === 'refresh_progress') {
+    const messageId = callbackQuery.message.message_id;
+    const progress = await loadProgress();
+    if (!progress) {
+      await editMessageText(chatId, messageId, '📊 No forwarding data');
+      return;
+    }
+    
+    const percent = progress.total_count ? Math.round((progress.success_count / progress.total_count) * 100) : 0;
+    const status = progress.is_active ? (progress.stop_requested ? '⏸️ Stopping' : '🔄 Running') : '✅ Complete';
+    
+    const buttons = progress.is_active 
+      ? [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]]
+      : [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }]];
+    
+    await editMessageText(chatId, messageId, 
+      `📊 <b>Progress</b> ${status}\n\n` +
+      `✅ Success: ${progress.success_count} / ${progress.total_count} (${percent}%)\n` +
+      `❌ Failed: ${progress.failed_count}\n` +
+      `⏭️ Skipped: ${progress.skipped_count}\n` +
+      `⚡ Rate limits: ${progress.rate_limit_hits}\n` +
+      `🚀 Speed: ${progress.speed} files/min\n` +
+      `📦 Batch: ${progress.current_batch} / ${progress.total_batches}`,
+      { inline_keyboard: buttons }
+    );
   }
   else if (data === 'status') {
     await handleCommand(chatId, '/status', null);
