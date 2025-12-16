@@ -452,6 +452,14 @@ serve(async (req) => {
     const { action, sourceChannel, destChannel, startMessageId, endMessageId } = body;
     console.log('Received action:', action, { sourceChannel, destChannel, startMessageId, endMessageId });
 
+    // Telegram may occasionally hit the webhook URL with a request that doesn't include an update.
+    // Never respond 4xx for these, otherwise Telegram disables button callbacks.
+    if (!action) {
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (action === 'configure') {
       await saveBotConfig(sourceChannel, destChannel);
       return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -512,6 +520,18 @@ serve(async (req) => {
       });
       console.log('setWebhook result:', result);
       return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    if (action === 'set-webhook-auto') {
+      const webhookUrl = `${SUPABASE_URL}/functions/v1/telegram-forwarder`;
+      console.log('Setting Telegram webhook (auto) to:', webhookUrl);
+      const result = await sendTelegramRequest('setWebhook', {
+        url: webhookUrl,
+        allowed_updates: ['message', 'channel_post', 'callback_query'],
+        drop_pending_updates: true,
+      });
+      console.log('setWebhook(auto) result:', result);
+      return new Response(JSON.stringify({ ...result, webhookUrl }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     if (action === 'delete-webhook') {
