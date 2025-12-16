@@ -788,8 +788,9 @@ async function handleCallbackQuery(callbackQuery: any) {
     await saveBotConfig(session.source_channel, session.dest_channel);
     
     // Calculate start message ID
+    // Skip number IS the starting message ID (user enters 291700 = start from msg 291700)
     const endId = session.last_message_id;
-    const startId = 1 + session.skip_number;
+    const startId = session.skip_number > 0 ? session.skip_number : 1;
     
     // Start forwarding
     await saveProgress({
