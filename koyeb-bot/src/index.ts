@@ -361,8 +361,9 @@ function formatProgressText(progress: any) {
   const success = progress?.success_count || 0;
   const duplicate = progress?.skipped_count || 0;
   const deleted = progress?.failed_count || 0;
-  // "Skip" means: user-requested messages ignored from the beginning
-  const skipped = Math.max(0, (progress?.start_id || 1) - 1);
+  // "Skipped" = user-requested skip from start + deleted messages
+  const userSkip = Math.max(0, (progress?.start_id || 1) - 1);
+  const skipped = userSkip + deleted;
   const filtered = 0;
 
   // Calculate elapsed time
