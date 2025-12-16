@@ -12,9 +12,79 @@ const PORT = process.env.PORT || 8000;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
 
+// Force Subscribe Channels (comma-separated: @channel1,@channel2 or channel IDs)
+const FORCE_SUB_CHANNELS = process.env.FORCE_SUB_CHANNELS 
+  ? process.env.FORCE_SUB_CHANNELS.split(',').map(ch => ch.trim()).filter(ch => ch)
+  : [];
+
+// Channel names for display (comma-separated, same order as FORCE_SUB_CHANNELS)
+const FORCE_SUB_CHANNEL_NAMES = process.env.FORCE_SUB_CHANNEL_NAMES
+  ? process.env.FORCE_SUB_CHANNEL_NAMES.split(',').map(name => name.trim())
+  : [];
+
 // Check if user is admin
 function isAdmin(userId: number): boolean {
   return ADMIN_USER_ID !== null && userId === ADMIN_USER_ID;
+}
+
+// Check if user is member of a channel
+async function checkChannelMembership(userId: number, channelId: string): Promise<boolean> {
+  try {
+    const response = await sendTelegramRequest('getChatMember', {
+      chat_id: channelId,
+      user_id: userId
+    });
+    if (response.ok && response.result) {
+      const status = response.result.status;
+      return ['creator', 'administrator', 'member'].includes(status);
+    }
+    return false;
+  } catch (error) {
+    console.error(`Error checking membership for channel ${channelId}:`, error);
+    return false;
+  }
+}
+
+// Check all force subscribe channels
+async function checkAllSubscriptions(userId: number): Promise<{ allJoined: boolean; notJoined: string[] }> {
+  if (FORCE_SUB_CHANNELS.length === 0) {
+    return { allJoined: true, notJoined: [] };
+  }
+  
+  const notJoined: string[] = [];
+  for (let i = 0; i < FORCE_SUB_CHANNELS.length; i++) {
+    const channelId = FORCE_SUB_CHANNELS[i];
+    const isMember = await checkChannelMembership(userId, channelId);
+    if (!isMember) {
+      notJoined.push(channelId);
+    }
+  }
+  
+  return { allJoined: notJoined.length === 0, notJoined };
+}
+
+// Show force subscribe message
+async function showForceSubscribe(chatId: number) {
+  const buttons: any[][] = [];
+  
+  for (let i = 0; i < FORCE_SUB_CHANNELS.length; i++) {
+    const channelId = FORCE_SUB_CHANNELS[i];
+    const channelName = FORCE_SUB_CHANNEL_NAMES[i] || `Update Channel ${i + 1}`;
+    const channelLink = channelId.startsWith('@') 
+      ? `https://t.me/${channelId.substring(1)}` 
+      : `https://t.me/c/${channelId.replace('-100', '')}`;
+    
+    buttons.push([{ text: `📢 Join ${channelName} ✅`, url: channelLink }]);
+  }
+  
+  buttons.push([{ text: '✅ Continue ➡️', callback_data: 'check_subscription' }]);
+  
+  await sendMessage(chatId, 
+    `🔐 <b>Access Required</b>\n\n` +
+    `To use this bot, you must join our update channel(s).\n\n` +
+    `👇 <b>Join the channel(s) below and click Continue:</b>`,
+    { inline_keyboard: buttons }
+  );
 }
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
@@ -478,6 +548,16 @@ async function handleCommand(chatId: number, text: string, message: any) {
 
   if (command === '/start') {
     await clearUserSession(chatId);
+    
+    // Check force subscribe (skip for admin)
+    if (!isAdmin(chatId) && FORCE_SUB_CHANNELS.length > 0) {
+      const { allJoined } = await checkAllSubscriptions(chatId);
+      if (!allJoined) {
+        await showForceSubscribe(chatId);
+        return;
+      }
+    }
+    
     await showMainMenu(chatId, chatId);
   }
   
@@ -678,7 +758,29 @@ async function handleCallbackQuery(callbackQuery: any) {
   if (data === 'menu') {
     const userId = callbackQuery.from?.id;
     await clearUserSession(chatId);
+    
+    // Check force subscribe (skip for admin)
+    if (!isAdmin(userId) && FORCE_SUB_CHANNELS.length > 0) {
+      const { allJoined } = await checkAllSubscriptions(userId);
+      if (!allJoined) {
+        await showForceSubscribe(chatId);
+        return;
+      }
+    }
+    
     await showMainMenu(chatId, userId);
+  }
+  else if (data === 'check_subscription') {
+    const userId = callbackQuery.from?.id;
+    const { allJoined, notJoined } = await checkAllSubscriptions(userId);
+    
+    if (allJoined) {
+      await sendMessage(chatId, '✅ <b>Verification Successful!</b>\n\nYou have joined all required channels.');
+      await showMainMenu(chatId, userId);
+    } else {
+      await sendMessage(chatId, `❌ <b>Not Joined Yet!</b>\n\nPlease join all the channels first, then click Continue again.`);
+      await showForceSubscribe(chatId);
+    }
   }
   else if (data === 'admin_panel') {
     const userId = callbackQuery.from?.id;
