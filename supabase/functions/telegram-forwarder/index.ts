@@ -13,6 +13,55 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
+// Session states
+const STATES = {
+  IDLE: 'idle',
+  WAITING_SOURCE: 'waiting_source',
+  WAITING_SKIP: 'waiting_skip',
+  WAITING_DEST: 'waiting_dest',
+  CONFIRMING: 'confirming',
+};
+
+// User session management
+async function getUserSession(userId: number) {
+  const { data } = await supabase
+    .from('user_sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return data;
+}
+
+async function setUserSession(userId: number, updates: any) {
+  const existing = await getUserSession(userId);
+  if (existing) {
+    await supabase
+      .from('user_sessions')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('user_id', userId);
+  } else {
+    await supabase
+      .from('user_sessions')
+      .insert({ user_id: userId, ...updates });
+  }
+}
+
+async function clearUserSession(userId: number) {
+  await supabase
+    .from('user_sessions')
+    .update({
+      state: STATES.IDLE,
+      source_channel: null,
+      source_title: null,
+      dest_channel: null,
+      dest_title: null,
+      skip_number: 0,
+      last_message_id: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('user_id', userId);
+}
+
 // Database operations
 async function loadBotConfig() {
   const { data } = await supabase.from('bot_config').select('*').limit(1).maybeSingle();
@@ -113,32 +162,73 @@ async function saveForwardedMessageIds(sourceChannel: string, destChannel: strin
   await supabase.from('forwarded_messages').insert(records);
 }
 
+// Extract channel info from message
+function extractChannelFromMessage(message: any): { chatId: string; title: string; lastMsgId: number } | null {
+  // Check if it's a forwarded message from a channel
+  if (message.forward_from_chat) {
+    const chat = message.forward_from_chat;
+    const chatId = chat.id.toString();
+    const title = chat.title || chat.username || 'Unknown';
+    const lastMsgId = message.forward_from_message_id;
+    return { chatId, title, lastMsgId };
+  }
+  
+  // Check if it's a Telegram link
+  if (message.text) {
+    const regex = /(?:https?:\/\/)?(?:t\.me|telegram\.me|telegram\.dog)\/(c\/)?(\d+|[a-zA-Z_0-9]+)\/(\d+)/;
+    const match = message.text.match(regex);
+    if (match) {
+      let chatId = match[2];
+      if (match[1] === 'c/' && chatId.match(/^\d+$/)) {
+        chatId = '-100' + chatId;
+      }
+      const lastMsgId = parseInt(match[3]);
+      return { chatId, title: 'Link', lastMsgId };
+    }
+  }
+  
+  return null;
+}
+
+// Show main menu
+async function showMainMenu(chatId: number) {
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '🚀 Forward', callback_data: 'forward' },
+        { text: '⚙️ Set Config', callback_data: 'config' }
+      ],
+      [
+        { text: '▶️ Resume', callback_data: 'resume' },
+        { text: '⏹️ Stop', callback_data: 'stop' }
+      ],
+      [
+        { text: '📊 Progress', callback_data: 'progress' },
+        { text: '📡 Status', callback_data: 'status' }
+      ],
+      [
+        { text: '❓ Help', callback_data: 'help' }
+      ]
+    ]
+  };
+  await sendMessage(chatId, `🤖 <b>Telegram Forwarder Bot</b>\n\nSelect an option below:`, keyboard);
+}
+
 // Command handlers
-async function handleCommand(chatId: number, text: string) {
+async function handleCommand(chatId: number, text: string, message: any) {
   const parts = text.split(' ');
-  const command = parts[0].toLowerCase().replace('@', '').split('@')[0];
+  const command = parts[0].toLowerCase().replace(/@.*$/, '');
 
   if (command === '/start') {
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '⚙️ Set Config', callback_data: 'config' },
-          { text: '🚀 Forward', callback_data: 'forward' }
-        ],
-        [
-          { text: '▶️ Resume', callback_data: 'resume' },
-          { text: '⏹️ Stop', callback_data: 'stop' }
-        ],
-        [
-          { text: '📊 Progress', callback_data: 'progress' },
-          { text: '📡 Status', callback_data: 'status' }
-        ],
-        [
-          { text: '❓ Help', callback_data: 'help' }
-        ]
-      ]
-    };
-    await sendMessage(chatId, `🤖 <b>Telegram Forwarder Bot</b>\n\nSelect an option below:`, keyboard);
+    await clearUserSession(chatId);
+    await showMainMenu(chatId);
+  }
+  
+  else if (command === '/cancel') {
+    await clearUserSession(chatId);
+    await sendMessage(chatId, '❌ Process cancelled.', {
+      inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]]
+    });
   }
   
   else if (command === '/setconfig') {
@@ -149,51 +239,19 @@ async function handleCommand(chatId: number, text: string) {
     const source = parts[1];
     const dest = parts[2];
     await saveBotConfig(source, dest);
-    await sendMessage(chatId, `✅ Config saved!\n\n📤 Source: ${source}\n📥 Destination: ${dest}`);
+    await sendMessage(chatId, `✅ Config saved!\n\n📤 Source: <code>${source}</code>\n📥 Destination: <code>${dest}</code>`, {
+      inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]]
+    });
   }
   
-  else if (command === '/forward') {
-    const config = await loadBotConfig();
-    if (!config) {
-      await sendMessage(chatId, '❌ Please set config first with /setconfig');
-      return;
-    }
-    
-    if (parts.length < 3) {
-      await sendMessage(chatId, '❌ Usage: /forward [start_id] [end_id]\nExample: /forward 1 1000');
-      return;
-    }
-    
-    const startId = parseInt(parts[1]);
-    const endId = parseInt(parts[2]);
-    
-    if (isNaN(startId) || isNaN(endId) || startId > endId) {
-      await sendMessage(chatId, '❌ Invalid message IDs');
-      return;
-    }
-    
-    await saveProgress({
-      source_channel: config.source_channel,
-      dest_channel: config.dest_channel,
-      start_id: startId,
-      end_id: endId,
-      current_batch: 0,
-      total_batches: Math.ceil((endId - startId + 1) / 100),
-      success_count: 0,
-      failed_count: 0,
-      skipped_count: 0,
-      total_count: endId - startId + 1,
-      is_active: true,
-      stop_requested: false,
-      started_at: new Date().toISOString(),
-      rate_limit_hits: 0,
-      speed: 0,
-    });
-    
-    await sendMessage(chatId, `🚀 Starting forward: ${startId} to ${endId}\n⚠️ Use /resume if it stops.`);
-    
-    // Start forwarding in background
-    bulkForward(config.source_channel, config.dest_channel, startId, endId, false, chatId);
+  else if (command === '/forward' || command === '/fwd') {
+    await setUserSession(chatId, { state: STATES.WAITING_SOURCE });
+    await sendMessage(chatId, 
+      `<b>( SET SOURCE CHAT )</b>\n\n` +
+      `Forward the last message or last message link of source chat.\n` +
+      `/cancel - cancel this process`,
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel' }]] }
+    );
   }
   
   else if (command === '/resume') {
@@ -231,6 +289,7 @@ async function handleCommand(chatId: number, text: string) {
       `📊 <b>Progress</b> ${status}\n\n` +
       `✅ Success: ${progress.success_count} / ${progress.total_count} (${percent}%)\n` +
       `❌ Failed: ${progress.failed_count}\n` +
+      `⏭️ Skipped: ${progress.skipped_count}\n` +
       `⚡ Rate limits: ${progress.rate_limit_hits}\n` +
       `🚀 Speed: ${progress.speed} files/min\n` +
       `📦 Batch: ${progress.current_batch} / ${progress.total_batches}`
@@ -240,11 +299,119 @@ async function handleCommand(chatId: number, text: string) {
   else if (command === '/status') {
     const config = await loadBotConfig();
     if (!config) {
-      await sendMessage(chatId, '⚙️ Bot not configured. Use /setconfig');
+      await sendMessage(chatId, '⚙️ Bot not configured. Use /setconfig or the Forward wizard.');
       return;
     }
-    await sendMessage(chatId, `✅ <b>Bot Status</b>\n\n📤 Source: ${config.source_channel}\n📥 Dest: ${config.dest_channel}`);
+    await sendMessage(chatId, `✅ <b>Bot Status</b>\n\n📤 Source: <code>${config.source_channel}</code>\n📥 Dest: <code>${config.dest_channel}</code>`);
   }
+}
+
+// Handle wizard state messages
+async function handleWizardMessage(chatId: number, message: any) {
+  const session = await getUserSession(chatId);
+  if (!session || session.state === STATES.IDLE) return false;
+  
+  const text = message.text || '';
+  
+  // Handle cancel command
+  if (text.toLowerCase() === '/cancel') {
+    await clearUserSession(chatId);
+    await sendMessage(chatId, '❌ Process cancelled.', {
+      inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]]
+    });
+    return true;
+  }
+  
+  // State: Waiting for source channel
+  if (session.state === STATES.WAITING_SOURCE) {
+    const channelInfo = extractChannelFromMessage(message);
+    if (!channelInfo) {
+      await sendMessage(chatId, '❌ Invalid! Please forward a message from the source channel or paste a message link.');
+      return true;
+    }
+    
+    await setUserSession(chatId, {
+      state: STATES.WAITING_SKIP,
+      source_channel: channelInfo.chatId,
+      source_title: channelInfo.title,
+      last_message_id: channelInfo.lastMsgId,
+    });
+    
+    await sendMessage(chatId,
+      `<b>( SET MESSAGE SKIPPING NUMBER )</b>\n\n` +
+      `Skip the message as much as you enter the number and the rest of the message will be forwarded\n` +
+      `Default Skip Number = 0\n` +
+      `eg: You enter 0 = 0 message skiped\n` +
+      ` You enter 5 = 5 message skiped\n` +
+      `/cancel - cancel this process`,
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel' }]] }
+    );
+    return true;
+  }
+  
+  // State: Waiting for skip number
+  if (session.state === STATES.WAITING_SKIP) {
+    const skipNum = parseInt(text);
+    if (isNaN(skipNum) || skipNum < 0) {
+      await sendMessage(chatId, '❌ Please enter a valid number (0 or more).');
+      return true;
+    }
+    
+    await setUserSession(chatId, {
+      state: STATES.WAITING_DEST,
+      skip_number: skipNum,
+    });
+    
+    await sendMessage(chatId,
+      `<b>( SET DESTINATION CHAT )</b>\n\n` +
+      `Forward any message from the destination channel where you want to forward messages.\n` +
+      `/cancel - cancel this process`,
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel' }]] }
+    );
+    return true;
+  }
+  
+  // State: Waiting for destination channel
+  if (session.state === STATES.WAITING_DEST) {
+    const channelInfo = extractChannelFromMessage(message);
+    if (!channelInfo) {
+      await sendMessage(chatId, '❌ Invalid! Please forward a message from the destination channel or paste a message link.');
+      return true;
+    }
+    
+    await setUserSession(chatId, {
+      state: STATES.CONFIRMING,
+      dest_channel: channelInfo.chatId,
+      dest_title: channelInfo.title,
+    });
+    
+    // Get updated session
+    const updatedSession = await getUserSession(chatId);
+    
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Yes, Start', callback_data: 'confirm_forward' },
+          { text: '❌ No, Cancel', callback_data: 'cancel' }
+        ]
+      ]
+    };
+    
+    await sendMessage(chatId,
+      `<b>📋 Forwarding Summary</b>\n\n` +
+      `📤 <b>Source:</b> ${updatedSession?.source_title || 'Unknown'}\n` +
+      `   ID: <code>${updatedSession?.source_channel}</code>\n\n` +
+      `📥 <b>Destination:</b> ${updatedSession?.dest_title || 'Unknown'}\n` +
+      `   ID: <code>${updatedSession?.dest_channel}</code>\n\n` +
+      `⏭️ <b>Skip:</b> ${updatedSession?.skip_number} messages\n` +
+      `📨 <b>Last Msg ID:</b> ${updatedSession?.last_message_id}\n\n` +
+      `<b>Start forwarding?</b>`,
+      keyboard
+    );
+    return true;
+  }
+  
+  return false;
 }
 
 // Bulk forward with batching and rate limit handling
@@ -331,8 +498,6 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
       is_active: currentId <= endId,
       speed: speed,
     });
-
-    // No delay - maximum speed
   }
 
   // Complete
@@ -362,39 +527,115 @@ async function handleCallbackQuery(callbackQuery: any) {
   // Answer callback to remove loading state
   await sendTelegramRequest('answerCallbackQuery', { callback_query_id: callbackQueryId });
 
-  if (data === 'config') {
-    await sendMessage(chatId, `⚙️ <b>Set Configuration</b>\n\nUse command:\n<code>/setconfig [source_channel] [dest_channel]</code>\n\nExample:\n<code>/setconfig -1001234567890 -1009876543210</code>`);
+  if (data === 'menu') {
+    await clearUserSession(chatId);
+    await showMainMenu(chatId);
+  }
+  else if (data === 'config') {
+    await sendMessage(chatId, 
+      `⚙️ <b>Set Configuration</b>\n\n` +
+      `Use command:\n<code>/setconfig [source_channel] [dest_channel]</code>\n\n` +
+      `Example:\n<code>/setconfig -1001234567890 -1009876543210</code>\n\n` +
+      `<b>OR</b> use /forward for wizard-style setup!`,
+      { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] }
+    );
   }
   else if (data === 'forward') {
-    const config = await loadBotConfig();
-    if (!config) {
-      await sendMessage(chatId, '❌ Please set config first with /setconfig');
+    await setUserSession(chatId, { state: STATES.WAITING_SOURCE });
+    await sendMessage(chatId, 
+      `<b>( SET SOURCE CHAT )</b>\n\n` +
+      `Forward the last message or last message link of source chat.\n` +
+      `/cancel - cancel this process`,
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel' }]] }
+    );
+  }
+  else if (data === 'cancel') {
+    await clearUserSession(chatId);
+    await sendMessage(chatId, '❌ Process cancelled.', {
+      inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]]
+    });
+  }
+  else if (data === 'confirm_forward') {
+    const session = await getUserSession(chatId);
+    if (!session || session.state !== STATES.CONFIRMING) {
+      await sendMessage(chatId, '❌ Session expired. Please start again with /forward');
       return;
     }
-    await sendMessage(chatId, `🚀 <b>Start Forwarding</b>\n\nUse command:\n<code>/forward [start_id] [end_id]</code>\n\nExample:\n<code>/forward 1 1000</code>\n\n📤 Source: ${config.source_channel}\n📥 Dest: ${config.dest_channel}`);
+    
+    // Save config
+    await saveBotConfig(session.source_channel, session.dest_channel);
+    
+    // Calculate start message ID
+    const endId = session.last_message_id;
+    const startId = 1 + session.skip_number;
+    
+    // Start forwarding
+    await saveProgress({
+      source_channel: session.source_channel,
+      dest_channel: session.dest_channel,
+      start_id: startId,
+      end_id: endId,
+      current_batch: 0,
+      total_batches: Math.ceil((endId - startId + 1) / 100),
+      success_count: 0,
+      failed_count: 0,
+      skipped_count: 0,
+      total_count: endId - startId + 1,
+      is_active: true,
+      stop_requested: false,
+      started_at: new Date().toISOString(),
+      rate_limit_hits: 0,
+      speed: 0,
+    });
+    
+    await clearUserSession(chatId);
+    await sendMessage(chatId, 
+      `🚀 <b>Forwarding Started!</b>\n\n` +
+      `📤 From: ${session.source_title}\n` +
+      `📥 To: ${session.dest_title}\n` +
+      `📨 Messages: ${startId} to ${endId}\n` +
+      `⏭️ Skipping: ${session.skip_number} messages\n\n` +
+      `Use /progress to check status\nUse /stop to stop`,
+      { inline_keyboard: [
+        [{ text: '📊 Progress', callback_data: 'progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]
+      ]}
+    );
+    
+    // Start forwarding in background
+    bulkForward(session.source_channel, session.dest_channel, startId, endId, false, chatId);
   }
   else if (data === 'resume') {
-    await handleCommand(chatId, '/resume');
+    await handleCommand(chatId, '/resume', null);
   }
-  else if (data === 'stop') {
-    await handleCommand(chatId, '/stop');
+  else if (data === 'stop' || data === 'stop_forward') {
+    await handleCommand(chatId, '/stop', null);
   }
   else if (data === 'progress') {
-    await handleCommand(chatId, '/progress');
+    await handleCommand(chatId, '/progress', null);
   }
   else if (data === 'status') {
-    await handleCommand(chatId, '/status');
+    await handleCommand(chatId, '/status', null);
   }
   else if (data === 'help') {
-    await sendMessage(chatId, `❓ <b>Help</b>\n\n` +
+    await sendMessage(chatId, 
+      `❓ <b>Help</b>\n\n` +
       `<b>Commands:</b>\n` +
       `/start - Show menu\n` +
-      `/setconfig [source] [dest] - Set channels\n` +
-      `/forward [start] [end] - Forward messages\n` +
+      `/forward - Wizard to set source & destination\n` +
+      `/setconfig [source] [dest] - Set channels manually\n` +
       `/resume - Resume forwarding\n` +
       `/stop - Stop forwarding\n` +
       `/progress - Check progress\n` +
-      `/status - Check bot status`);
+      `/status - Check bot status\n` +
+      `/cancel - Cancel current process\n\n` +
+      `<b>How to use:</b>\n` +
+      `1. Click 🚀 Forward\n` +
+      `2. Forward any message from source channel\n` +
+      `3. Enter skip number (0 for all)\n` +
+      `4. Forward any message from destination channel\n` +
+      `5. Confirm and start!`,
+      { inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]] }
+    );
   }
 }
 
@@ -414,11 +655,15 @@ async function handleWebhook(update: any) {
   const chatId = message.chat.id;
   const text = message.text || '';
 
-  // Handle commands
+  // Handle commands first
   if (text.startsWith('/')) {
-    await handleCommand(chatId, text);
+    await handleCommand(chatId, text, message);
     return;
   }
+  
+  // Handle wizard state messages
+  const handled = await handleWizardMessage(chatId, message);
+  if (handled) return;
 
   // Auto-forward from source channel
   const config = await loadBotConfig();
@@ -438,7 +683,6 @@ serve(async (req) => {
   }
 
   try {
-    const url = new URL(req.url);
     const body = await req.json().catch(() => ({}));
 
     // Telegram webhook
@@ -452,12 +696,8 @@ serve(async (req) => {
     const { action, sourceChannel, destChannel, startMessageId, endMessageId } = body;
     console.log('Received action:', action, { sourceChannel, destChannel, startMessageId, endMessageId });
 
-    // Telegram may occasionally hit the webhook URL with a request that doesn't include an update.
-    // Never respond 4xx for these, otherwise Telegram disables button callbacks.
     if (!action) {
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     if (action === 'configure') {
@@ -489,7 +729,6 @@ serve(async (req) => {
         speed: 0,
       });
 
-      // Start in background
       const result = await bulkForward(config.source_channel, config.dest_channel, startMessageId, endMessageId, false);
       return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
