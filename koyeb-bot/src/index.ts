@@ -28,6 +28,11 @@ const FORCE_SUB_LINKS = process.env.FORCE_SUB_LINKS
   ? process.env.FORCE_SUB_LINKS.split(',').map(link => link.trim())
   : [];
 
+// Required referrals to unlock bot (default: 10)
+const REQUIRED_REFERRALS = process.env.REQUIRED_REFERRALS 
+  ? parseInt(process.env.REQUIRED_REFERRALS) 
+  : 10;
+
 // Check if user is admin
 function isAdmin(userId: number): boolean {
   return ADMIN_USER_ID !== null && userId === ADMIN_USER_ID;
@@ -70,7 +75,7 @@ async function checkAllSubscriptions(userId: number): Promise<{ allJoined: boole
 }
 
 // Show force subscribe message
-async function showForceSubscribe(chatId: number) {
+async function showForceSubscribe(chatId: number, userId: number) {
   const buttons: any[][] = [];
   
   for (let i = 0; i < FORCE_SUB_CHANNELS.length; i++) {
@@ -92,10 +97,74 @@ async function showForceSubscribe(chatId: number) {
   
   await sendMessage(chatId, 
     `🔐 <b>Access Required</b>\n\n` +
-    `To use this bot, you must join our channel(s)/group(s).\n\n` +
+    `To use this bot, you must:\n` +
+    `1️⃣ Join our channel(s)/group(s)\n` +
+    `2️⃣ Invite ${REQUIRED_REFERRALS} members using your referral link\n\n` +
     `👇 <b>Join below and click Continue:</b>`,
     { inline_keyboard: buttons }
   );
+}
+
+// Show referral status message
+async function showReferralStatus(chatId: number, userId: number, botUsername: string) {
+  const referralCount = await getReferralCount(userId);
+  const remaining = Math.max(0, REQUIRED_REFERRALS - referralCount);
+  
+  const referralLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+  
+  const buttons: any[][] = [
+    [{ text: '🔄 Refresh Status', callback_data: 'check_referrals' }],
+    [{ text: '📤 Share Referral Link', url: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('Join this bot using my link!')}` }]
+  ];
+  
+  if (remaining <= 0) {
+    buttons.push([{ text: '✅ Continue to Bot', callback_data: 'referral_complete' }]);
+  }
+  
+  await sendMessage(chatId, 
+    `👥 <b>Referral Status</b>\n\n` +
+    `✅ You have joined all required channels!\n\n` +
+    `Now invite ${REQUIRED_REFERRALS} members to unlock the bot.\n\n` +
+    `📊 <b>Progress:</b> ${referralCount}/${REQUIRED_REFERRALS} referrals\n` +
+    `📈 <b>Remaining:</b> ${remaining} more needed\n\n` +
+    `🔗 <b>Your Referral Link:</b>\n<code>${referralLink}</code>\n\n` +
+    `Share this link with friends. When they join using your link, you get credit!`,
+    { inline_keyboard: buttons }
+  );
+}
+
+// Get referral count for a user
+async function getReferralCount(userId: number): Promise<number> {
+  return await referrals.countDocuments({ referrer_id: userId });
+}
+
+// Add referral
+async function addReferral(referrerId: number, referredId: number): Promise<boolean> {
+  try {
+    // Check if this user was already referred
+    const existing = await referrals.findOne({ referred_id: referredId });
+    if (existing) return false;
+    
+    // Don't allow self-referral
+    if (referrerId === referredId) return false;
+    
+    await referrals.insertOne({
+      referrer_id: referrerId,
+      referred_id: referredId,
+      created_at: new Date()
+    });
+    return true;
+  } catch (error) {
+    console.error('Error adding referral:', error);
+    return false;
+  }
+}
+
+// Check if user has enough referrals
+async function hasEnoughReferrals(userId: number): Promise<boolean> {
+  if (REQUIRED_REFERRALS <= 0) return true;
+  const count = await getReferralCount(userId);
+  return count >= REQUIRED_REFERRALS;
 }
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
@@ -135,6 +204,7 @@ let userSessions: Collection;
 let botConfig: Collection<BotConfigDoc>;
 let forwardingProgress: Collection<ProgressDoc>;
 let forwardedMessages: Collection;
+let referrals: Collection;
 
 async function connectMongoDB() {
   const client = new MongoClient(MONGODB_URI);
@@ -145,10 +215,13 @@ async function connectMongoDB() {
   botConfig = db.collection<BotConfigDoc>('bot_config');
   forwardingProgress = db.collection<ProgressDoc>('forwarding_progress');
   forwardedMessages = db.collection('forwarded_messages');
+  referrals = db.collection('referrals');
 
   // Create indexes
   await userSessions.createIndex({ user_id: 1 }, { unique: true });
   await forwardedMessages.createIndex({ source_channel: 1, dest_channel: 1, source_message_id: 1 });
+  await referrals.createIndex({ referrer_id: 1 });
+  await referrals.createIndex({ referred_id: 1 }, { unique: true });
 
   console.log('✅ Connected to MongoDB');
 }
@@ -553,18 +626,43 @@ async function bulkForward(
 }
 
 // Command handlers
-async function handleCommand(chatId: number, text: string, message: any) {
+async function handleCommand(chatId: number, text: string, message: any, botUsername: string) {
   const parts = text.split(' ');
   const command = parts[0].toLowerCase().replace(/@.*$/, '');
 
   if (command === '/start') {
     await clearUserSession(chatId);
     
+    // Check for referral parameter
+    if (parts.length > 1 && parts[1].startsWith('ref_')) {
+      const referrerId = parseInt(parts[1].replace('ref_', ''));
+      if (!isNaN(referrerId)) {
+        const added = await addReferral(referrerId, chatId);
+        if (added) {
+          // Notify referrer
+          const referrerCount = await getReferralCount(referrerId);
+          const remaining = Math.max(0, REQUIRED_REFERRALS - referrerCount);
+          await sendMessage(referrerId, 
+            `🎉 <b>New Referral!</b>\n\n` +
+            `Someone joined using your link!\n` +
+            `📊 Progress: ${referrerCount}/${REQUIRED_REFERRALS}\n` +
+            `📈 Remaining: ${remaining} more needed${remaining === 0 ? '\n\n✅ Bot unlocked!' : ''}`
+          );
+        }
+      }
+    }
+    
     // Check force subscribe (skip for admin)
     if (!isAdmin(chatId) && FORCE_SUB_CHANNELS.length > 0) {
       const { allJoined } = await checkAllSubscriptions(chatId);
       if (!allJoined) {
-        await showForceSubscribe(chatId);
+        await showForceSubscribe(chatId, chatId);
+        return;
+      }
+      
+      // Check referrals (skip for admin)
+      if (REQUIRED_REFERRALS > 0 && !(await hasEnoughReferrals(chatId))) {
+        await showReferralStatus(chatId, chatId, botUsername);
         return;
       }
     }
@@ -774,7 +872,15 @@ async function handleCallbackQuery(callbackQuery: any) {
     if (!isAdmin(userId) && FORCE_SUB_CHANNELS.length > 0) {
       const { allJoined } = await checkAllSubscriptions(userId);
       if (!allJoined) {
-        await showForceSubscribe(chatId);
+        await showForceSubscribe(chatId, userId);
+        return;
+      }
+      
+      // Check referrals
+      if (REQUIRED_REFERRALS > 0 && !(await hasEnoughReferrals(userId))) {
+        const botInfo = await sendTelegramRequest('getMe', {});
+        const botUsername = botInfo?.result?.username || 'bot';
+        await showReferralStatus(chatId, userId, botUsername);
         return;
       }
     }
@@ -786,11 +892,38 @@ async function handleCallbackQuery(callbackQuery: any) {
     const { allJoined, notJoined } = await checkAllSubscriptions(userId);
     
     if (allJoined) {
-      await sendMessage(chatId, '✅ <b>Verification Successful!</b>\n\nYou have joined all required channels.');
-      await showMainMenu(chatId, userId);
+      // Check if referrals are required
+      if (REQUIRED_REFERRALS > 0 && !(await hasEnoughReferrals(userId))) {
+        const botInfo = await sendTelegramRequest('getMe', {});
+        const botUsername = botInfo?.result?.username || 'bot';
+        await showReferralStatus(chatId, userId, botUsername);
+      } else {
+        await sendMessage(chatId, '✅ <b>Verification Successful!</b>\n\nYou have access to the bot.');
+        await showMainMenu(chatId, userId);
+      }
     } else {
       await sendMessage(chatId, `❌ <b>Not Joined Yet!</b>\n\nPlease join all the channels first, then click Continue again.`);
-      await showForceSubscribe(chatId);
+      await showForceSubscribe(chatId, userId);
+    }
+  }
+  else if (data === 'check_referrals') {
+    const userId = callbackQuery.from?.id;
+    const botInfo = await sendTelegramRequest('getMe', {});
+    const botUsername = botInfo?.result?.username || 'bot';
+    await showReferralStatus(chatId, userId, botUsername);
+  }
+  else if (data === 'referral_complete') {
+    const userId = callbackQuery.from?.id;
+    
+    // Verify referrals before proceeding
+    if (await hasEnoughReferrals(userId)) {
+      await sendMessage(chatId, '🎉 <b>Congratulations!</b>\n\nYou have completed all requirements. Welcome to the bot!');
+      await showMainMenu(chatId, userId);
+    } else {
+      await sendMessage(chatId, '❌ You still need more referrals. Keep inviting!');
+      const botInfo = await sendTelegramRequest('getMe', {});
+      const botUsername = botInfo?.result?.username || 'bot';
+      await showReferralStatus(chatId, userId, botUsername);
     }
   }
   else if (data === 'admin_panel') {
@@ -901,10 +1034,12 @@ async function handleCallbackQuery(callbackQuery: any) {
     bulkForward(session.source_channel, session.dest_channel, startId, endId, false, chatId);
   }
   else if (data === 'resume') {
-    await handleCommand(chatId, '/resume', null);
+    const username = await getBotUsername();
+    await handleCommand(chatId, '/resume', null, username);
   }
   else if (data === 'progress') {
-    await handleCommand(chatId, '/progress', null);
+    const username = await getBotUsername();
+    await handleCommand(chatId, '/progress', null, username);
   }
   else if (data === 'refresh_progress') {
     const messageId = callbackQuery.message.message_id;
@@ -921,7 +1056,8 @@ async function handleCallbackQuery(callbackQuery: any) {
     });
   }
   else if (data === 'status') {
-    await handleCommand(chatId, '/status', null);
+    const username = await getBotUsername();
+    await handleCommand(chatId, '/status', null, username);
   }
   else if (data === 'stop' || data === 'stop_forward') {
     await requestStop();
@@ -950,6 +1086,16 @@ async function handleCallbackQuery(callbackQuery: any) {
   }
 }
 
+// Bot username cache
+let botUsername: string | null = null;
+
+async function getBotUsername(): Promise<string> {
+  if (botUsername) return botUsername;
+  const botInfo = await sendTelegramRequest('getMe', {});
+  botUsername = botInfo?.result?.username || 'bot';
+  return botUsername;
+}
+
 // Webhook handler
 async function handleWebhook(update: any) {
   console.log('Received Telegram update:', JSON.stringify(update, null, 2));
@@ -966,7 +1112,8 @@ async function handleWebhook(update: any) {
   const text = message.text || '';
 
   if (text.startsWith('/')) {
-    await handleCommand(chatId, text, message);
+    const username = await getBotUsername();
+    await handleCommand(chatId, text, message, username);
     return;
   }
   
