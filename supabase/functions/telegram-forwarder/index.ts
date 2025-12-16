@@ -1,6 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// Declare EdgeRuntime for background tasks
+declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -772,6 +775,66 @@ serve(async (req) => {
         console.log('Stop signal received');
         return new Response(
           JSON.stringify({ success: true, message: 'Stop signal sent' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+
+      case 'auto-resume':
+        console.log('Auto-resume triggered by cron');
+        const autoConfig = await loadBotConfig();
+        const autoProgress = await loadProgress();
+        
+        // Check if there's work to resume
+        if (!autoConfig || !autoProgress) {
+          console.log('No config or progress found');
+          return new Response(
+            JSON.stringify({ resumed: false, reason: 'No config or progress' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        
+        // Skip if already running
+        if (autoProgress.is_active) {
+          console.log('Already running, skipping auto-resume');
+          return new Response(
+            JSON.stringify({ resumed: false, reason: 'Already running' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        
+        // Skip if stopped by user
+        if (autoProgress.stop_requested) {
+          console.log('Stop was requested, skipping auto-resume');
+          return new Response(
+            JSON.stringify({ resumed: false, reason: 'Stop was requested' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        
+        // Check if there's more work to do
+        if (!autoProgress.start_id || !autoProgress.end_id || 
+            (autoProgress.current_batch || 0) >= (autoProgress.total_batches || 0)) {
+          console.log('No pending work');
+          return new Response(
+            JSON.stringify({ resumed: false, reason: 'No pending work' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        
+        console.log(`Auto-resuming from batch ${autoProgress.current_batch}/${autoProgress.total_batches}`);
+        
+        // Run resume in background
+        EdgeRuntime.waitUntil(
+          bulkForward(autoConfig.sourceChannel, autoConfig.destChannel, autoProgress.start_id, autoProgress.end_id, true)
+            .then(result => {
+              console.log('Auto-resume batch complete:', result);
+            })
+            .catch(err => {
+              console.error('Auto-resume error:', err);
+            })
+        );
+        
+        return new Response(
+          JSON.stringify({ resumed: true, batch: autoProgress.current_batch }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
 
