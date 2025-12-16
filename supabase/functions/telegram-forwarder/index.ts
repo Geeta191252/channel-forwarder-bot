@@ -144,6 +144,7 @@ async function handleCommand(chatId: string, text: string): Promise<string> {
       return `🤖 <b>Telegram File Forwarder Bot</b>
 
 <b>Commands:</b>
+/setupwebhook - Auto setup webhook (run once)
 /setconfig &lt;source&gt; &lt;dest&gt; - Set source and destination channels
 /forward &lt;start&gt; &lt;end&gt; - Forward messages from start to end ID
 /status - Show current configuration
@@ -153,6 +154,21 @@ async function handleCommand(chatId: string, text: string): Promise<string> {
 <b>Example:</b>
 <code>/setconfig -1001234567890 -1009876543210</code>
 <code>/forward 1 10000</code>`;
+
+    case '/setupwebhook':
+      const webhookUrl = `https://wqspxhsjujakaldaxhvm.supabase.co/functions/v1/telegram-forwarder`;
+      const result = await sendTelegramRequest('setWebhook', {
+        url: webhookUrl,
+        allowed_updates: ['message', 'channel_post'],
+      });
+      if (result.ok) {
+        return `✅ Webhook set successfully!
+🔗 URL: <code>${webhookUrl}</code>
+
+Now use /setconfig to configure channels.`;
+      } else {
+        return `❌ Failed to set webhook: ${result.description || 'Unknown error'}`;
+      }
 
     case '/setconfig':
       if (args.length < 2) {
