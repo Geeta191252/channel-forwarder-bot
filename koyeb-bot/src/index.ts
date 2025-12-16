@@ -233,6 +233,7 @@ const STATES = {
   WAITING_SKIP: 'waiting_skip',
   WAITING_DEST: 'waiting_dest',
   CONFIRMING: 'confirming',
+  WAITING_TARGET_CHAT: 'waiting_target_chat',
 };
 
 // User session management
@@ -466,7 +467,10 @@ function extractChannelFromMessage(message: any): { chatId: string; title: strin
 
 async function showMainMenu(chatId: number, userId?: number) {
   const buttons = [
-    [{ text: '🚀 Forward', callback_data: 'forward' }],
+    [
+      { text: '🚀 Forward', callback_data: 'forward' },
+      { text: '📢 Channel', callback_data: 'channel' }
+    ],
     [
       { text: '▶️ Resume', callback_data: 'resume' },
       { text: '⏹️ Stop', callback_data: 'stop' }
@@ -853,6 +857,27 @@ async function handleWizardMessage(chatId: number, message: any) {
     return true;
   }
   
+  if (session.state === STATES.WAITING_TARGET_CHAT) {
+    const channelInfo = extractChannelFromMessage(message);
+    if (!channelInfo) {
+      await sendMessage(chatId, '❌ Invalid! Please forward a message from your target chat.');
+      return true;
+    }
+    
+    await clearUserSession(chatId);
+    
+    await sendMessage(chatId,
+      `✅ <b>Target Chat Added!</b>\n\n` +
+      `📢 <b>Channel:</b> ${channelInfo.title}\n` +
+      `🆔 <b>ID:</b> <code>${channelInfo.chatId}</code>`,
+      { inline_keyboard: [
+        [{ text: '➕ Add Another', callback_data: 'add_channel' }],
+        [{ text: '🔙 Back to Channels', callback_data: 'channel' }]
+      ]}
+    );
+    return true;
+  }
+  
   return false;
 }
 
@@ -985,6 +1010,31 @@ async function handleCallbackQuery(callbackQuery: any) {
     await clearUserSession(chatId);
     await sendMessage(chatId, '❌ Process cancelled.', {
       inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]]
+    });
+  }
+  else if (data === 'channel') {
+    await sendMessage(chatId, 
+      `<u>My Channels</u>\n\n` +
+      `you can manage your target chats in here`,
+      { inline_keyboard: [
+        [{ text: '➕ Add Channel ➕', callback_data: 'add_channel' }],
+        [{ text: '↩️ Back', callback_data: 'menu' }]
+      ]}
+    );
+  }
+  else if (data === 'add_channel') {
+    await setUserSession(chatId, { state: STATES.WAITING_TARGET_CHAT });
+    await sendMessage(chatId, 
+      `<b>( SET TARGET CHAT )</b>\n\n` +
+      `📨 FORWARD A MESSAGE FROM YOUR TARGET CHAT\n\n` +
+      `/cancel - CANCEL THIS PROCESS`,
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel_target' }]] }
+    );
+  }
+  else if (data === 'cancel_target') {
+    await clearUserSession(chatId);
+    await sendMessage(chatId, '❌ Process cancelled.', {
+      inline_keyboard: [[{ text: '🔙 Back', callback_data: 'channel' }]]
     });
   }
   else if (data === 'confirm_forward') {
