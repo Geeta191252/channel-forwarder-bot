@@ -1,49 +1,76 @@
-# Telegram Forwarder Bot - Koyeb Deployment
+# Telegram Forwarder Bot (Koyeb + MongoDB)
 
-## 🚀 Quick Deploy to Koyeb
+Standalone Telegram Forwarder Bot for deployment on Koyeb with MongoDB database.
 
-### Step 1: GitHub पर Upload करें
+## Prerequisites
 
-1. इस `koyeb-bot` folder को GitHub repository में push करें
-2. या नया repository बनाएं सिर्फ इस folder के साथ
+1. **Telegram Bot Token** - Get from [@BotFather](https://t.me/BotFather)
+2. **MongoDB Database** - Get free cluster from [MongoDB Atlas](https://www.mongodb.com/atlas)
+3. **Koyeb Account** - Sign up at [koyeb.com](https://koyeb.com)
 
-### Step 2: Koyeb पर Deploy करें
+## Setup MongoDB Atlas (Free)
 
-1. [Koyeb Dashboard](https://app.koyeb.com) पर जाएं
-2. **Create Service** → **GitHub** select करें
-3. अपना repository select करें
-4. Settings configure करें:
-   - **Branch**: main
-   - **Root directory**: `koyeb-bot` (अगर main repo में है)
+1. Go to [MongoDB Atlas](https://www.mongodb.com/atlas)
+2. Create a free account
+3. Create a new cluster (Free M0 tier)
+4. Create database user with password
+5. Whitelist IP `0.0.0.0/0` (allows all IPs for Koyeb)
+6. Get connection string: Click "Connect" → "Drivers" → Copy URI
+7. Replace `<password>` with your actual password
+
+## Deployment Steps
+
+### 1. Connect GitHub
+In Lovable editor: Click **GitHub** → **Connect to GitHub** → **Create Repository**
+
+### 2. Deploy to Koyeb
+
+1. Go to [Koyeb Console](https://app.koyeb.com)
+2. Click **Create Service** → **GitHub**
+3. Select your repository
+4. Configure:
+   - **Root directory**: `koyeb-bot`
    - **Builder**: Docker
    - **Port**: 8000
 
-### Step 3: Environment Variables Set करें
+### 3. Environment Variables
 
-Koyeb dashboard में ये environment variables add करें:
+Add these in Koyeb service settings:
 
-| Variable | Description |
-|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | @BotFather से मिला token |
-| `SUPABASE_URL` | `https://wqspxhsjujakaldaxhvm.supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
-| `WEBHOOK_URL` | Koyeb app URL (deploy के बाद मिलेगा) |
+| Variable | Value |
+|----------|-------|
+| `TELEGRAM_BOT_TOKEN` | Your bot token from BotFather |
+| `MONGODB_URI` | `mongodb+srv://user:pass@cluster.mongodb.net/telegram_forwarder` |
+| `PORT` | `8000` |
+| `WEBHOOK_URL` | `https://your-app.koyeb.app` (set after first deploy) |
 
-### Step 4: Webhook Set करें
+### 4. Set Webhook
 
-Deploy होने के बाद:
+After deployment, visit:
+```
+https://your-app.koyeb.app/set-webhook
+```
 
-1. Koyeb से आपका app URL copy करें (जैसे: `https://your-app-xxxxx.koyeb.app`)
-2. Browser में जाएं: `https://your-app-xxxxx.koyeb.app/set-webhook`
-3. `{"ok":true}` response आना चाहिए
+## Bot Commands
 
-### Step 5: Bot Test करें
+- `/start` - Show main menu
+- `/forward` - Start forwarding wizard
+- `/setconfig [source] [dest]` - Manual config
+- `/resume` - Resume forwarding
+- `/stop` - Stop forwarding
+- `/progress` - Check progress
+- `/status` - Bot status
+- `/cancel` - Cancel current process
 
-Telegram में अपने bot को `/start` command भेजें!
+## MongoDB Collections
 
----
+The bot automatically creates these collections:
+- `user_sessions` - User wizard states
+- `bot_config` - Source/destination config
+- `forwarding_progress` - Current progress
+- `forwarded_messages` - Tracking forwarded messages
 
-## 🔧 Local Development
+## Local Development
 
 ```bash
 cd koyeb-bot
@@ -53,37 +80,8 @@ cp .env.example .env
 npm run dev
 ```
 
----
+## Troubleshooting
 
-## 📁 File Structure
-
-```
-koyeb-bot/
-├── src/
-│   └── index.ts      # Main bot code
-├── package.json
-├── tsconfig.json
-├── Dockerfile
-├── .env.example
-└── README.md
-```
-
----
-
-## 🔗 API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Health check |
-| `/health` | GET | Health status |
-| `/webhook` | POST | Telegram webhook |
-| `/set-webhook` | GET | Set Telegram webhook |
-| `/delete-webhook` | GET | Remove webhook |
-
----
-
-## ⚠️ Important Notes
-
-1. **Supabase tables**: Same database tables use होंगे (forwarding_progress, user_sessions, etc.)
-2. **Service Role Key**: Koyeb में Supabase SERVICE_ROLE key use करें, anon key नहीं
-3. **Webhook URL**: Deploy के बाद WEBHOOK_URL update करना न भूलें
+- **Bot not responding**: Check webhook is set correctly
+- **MongoDB connection error**: Verify connection string and IP whitelist
+- **Rate limits**: Bot handles Telegram rate limits automatically
