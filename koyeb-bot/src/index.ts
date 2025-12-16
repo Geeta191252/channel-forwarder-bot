@@ -1169,17 +1169,6 @@ async function handleCallbackQuery(callbackQuery: any) {
     });
     
     await clearUserSession(chatId);
-    await sendMessage(chatId, 
-      `🚀 <b>Forwarding Started!</b>\n\n` +
-      `📤 From: ${session.source_title}\n` +
-      `📥 To: ${session.dest_title}\n` +
-      `📨 Messages: ${startId} to ${endId}\n` +
-      `⏭️ Skipping: ${session.skip_number} messages\n\n` +
-      `Use /progress to check status\nUse /stop to stop`,
-      { inline_keyboard: [
-        [{ text: '📊 Progress', callback_data: 'progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]
-      ]}
-    );
     
     // Run forwarding in background
     bulkForward(session.source_channel, session.dest_channel, startId, endId, false, chatId);
