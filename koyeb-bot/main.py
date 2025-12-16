@@ -3,7 +3,7 @@ import asyncio
 import time
 from datetime import datetime
 from flask import Flask, request, jsonify
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -463,9 +463,8 @@ async def main():
     
     print("Bot is running!")
     
-    # Keep running
-    while True:
-        await asyncio.sleep(1)
+    # Use Pyrogram's idle to keep bot running and processing updates
+    await idle()
 
 
 if __name__ == "__main__":
