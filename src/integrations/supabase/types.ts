@@ -122,6 +122,48 @@ export type Database = {
         }
         Relationships: []
       }
+      user_sessions: {
+        Row: {
+          created_at: string
+          dest_channel: string | null
+          dest_title: string | null
+          id: string
+          last_message_id: number | null
+          skip_number: number | null
+          source_channel: string | null
+          source_title: string | null
+          state: string | null
+          updated_at: string
+          user_id: number
+        }
+        Insert: {
+          created_at?: string
+          dest_channel?: string | null
+          dest_title?: string | null
+          id?: string
+          last_message_id?: number | null
+          skip_number?: number | null
+          source_channel?: string | null
+          source_title?: string | null
+          state?: string | null
+          updated_at?: string
+          user_id: number
+        }
+        Update: {
+          created_at?: string
+          dest_channel?: string | null
+          dest_title?: string | null
+          id?: string
+          last_message_id?: number | null
+          skip_number?: number | null
+          source_channel?: string | null
+          source_title?: string | null
+          state?: string | null
+          updated_at?: string
+          user_id?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
