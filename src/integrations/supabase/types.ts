@@ -14,6 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      bot_config: {
+        Row: {
+          created_at: string
+          dest_channel: string
+          id: string
+          source_channel: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          dest_channel: string
+          id?: string
+          source_channel: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          dest_channel?: string
+          id?: string
+          source_channel?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       forwarded_messages: {
         Row: {
           dest_channel: string
