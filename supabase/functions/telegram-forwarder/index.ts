@@ -79,8 +79,10 @@ async function sendTelegramRequest(method: string, params: any) {
   return result;
 }
 
-async function sendMessage(chatId: string | number, text: string) {
-  return sendTelegramRequest('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML' });
+async function sendMessage(chatId: string | number, text: string, replyMarkup?: any) {
+  const params: any = { chat_id: chatId, text, parse_mode: 'HTML' };
+  if (replyMarkup) params.reply_markup = replyMarkup;
+  return sendTelegramRequest('sendMessage', params);
 }
 
 async function copyMessages(fromChatId: string, toChatId: string, messageIds: number[]) {
@@ -117,14 +119,26 @@ async function handleCommand(chatId: number, text: string) {
   const command = parts[0].toLowerCase().replace('@', '').split('@')[0];
 
   if (command === '/start') {
-    await sendMessage(chatId, `🤖 <b>Telegram Forwarder Bot</b>\n\n` +
-      `Commands:\n` +
-      `/setconfig [source] [dest] - Set channels\n` +
-      `/forward [start] [end] - Forward messages\n` +
-      `/resume - Resume forwarding\n` +
-      `/stop - Stop forwarding\n` +
-      `/progress - Check progress\n` +
-      `/status - Check bot status`);
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '⚙️ Set Config', callback_data: 'config' },
+          { text: '🚀 Forward', callback_data: 'forward' }
+        ],
+        [
+          { text: '▶️ Resume', callback_data: 'resume' },
+          { text: '⏹️ Stop', callback_data: 'stop' }
+        ],
+        [
+          { text: '📊 Progress', callback_data: 'progress' },
+          { text: '📡 Status', callback_data: 'status' }
+        ],
+        [
+          { text: '❓ Help', callback_data: 'help' }
+        ]
+      ]
+    };
+    await sendMessage(chatId, `🤖 <b>Telegram Forwarder Bot</b>\n\nSelect an option below:`, keyboard);
   }
   
   else if (command === '/setconfig') {
@@ -339,10 +353,61 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
   return { success: successCount, failed: failedCount, needsResume: false };
 }
 
+// Callback query handler for buttons
+async function handleCallbackQuery(callbackQuery: any) {
+  const chatId = callbackQuery.message.chat.id;
+  const data = callbackQuery.data;
+  const callbackQueryId = callbackQuery.id;
+
+  // Answer callback to remove loading state
+  await sendTelegramRequest('answerCallbackQuery', { callback_query_id: callbackQueryId });
+
+  if (data === 'config') {
+    await sendMessage(chatId, `⚙️ <b>Set Configuration</b>\n\nUse command:\n<code>/setconfig [source_channel] [dest_channel]</code>\n\nExample:\n<code>/setconfig -1001234567890 -1009876543210</code>`);
+  }
+  else if (data === 'forward') {
+    const config = await loadBotConfig();
+    if (!config) {
+      await sendMessage(chatId, '❌ Please set config first with /setconfig');
+      return;
+    }
+    await sendMessage(chatId, `🚀 <b>Start Forwarding</b>\n\nUse command:\n<code>/forward [start_id] [end_id]</code>\n\nExample:\n<code>/forward 1 1000</code>\n\n📤 Source: ${config.source_channel}\n📥 Dest: ${config.dest_channel}`);
+  }
+  else if (data === 'resume') {
+    await handleCommand(chatId, '/resume');
+  }
+  else if (data === 'stop') {
+    await handleCommand(chatId, '/stop');
+  }
+  else if (data === 'progress') {
+    await handleCommand(chatId, '/progress');
+  }
+  else if (data === 'status') {
+    await handleCommand(chatId, '/status');
+  }
+  else if (data === 'help') {
+    await sendMessage(chatId, `❓ <b>Help</b>\n\n` +
+      `<b>Commands:</b>\n` +
+      `/start - Show menu\n` +
+      `/setconfig [source] [dest] - Set channels\n` +
+      `/forward [start] [end] - Forward messages\n` +
+      `/resume - Resume forwarding\n` +
+      `/stop - Stop forwarding\n` +
+      `/progress - Check progress\n` +
+      `/status - Check bot status`);
+  }
+}
+
 // Webhook handler
 async function handleWebhook(update: any) {
   console.log('Received Telegram update:', JSON.stringify(update, null, 2));
   
+  // Handle callback queries (button clicks)
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query);
+    return;
+  }
+
   const message = update.message || update.channel_post;
   if (!message) return;
 
