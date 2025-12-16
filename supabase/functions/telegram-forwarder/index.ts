@@ -13,22 +13,6 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Stop flag (still in memory - only valid during single execution)
-let stopForwarding = false;
-
-// Live progress tracking (in memory for current execution)
-let liveProgress = {
-  isRunning: false,
-  success: 0,
-  failed: 0,
-  skipped: 0,
-  total: 0,
-  rateLimitHits: 0,
-  startTime: 0,
-  currentBatch: 0,
-  totalBatches: 0,
-};
-
 // Load config from database
 async function loadBotConfig(): Promise<{ sourceChannel: string; destChannel: string } | null> {
   const { data, error } = await supabase
@@ -59,6 +43,62 @@ async function saveBotConfig(sourceChannel: string, destChannel: string): Promis
     return false;
   }
   return true;
+}
+
+// Load progress from database
+async function loadProgress() {
+  const { data, error } = await supabase
+    .from('forwarding_progress')
+    .select('*')
+    .eq('id', 'current')
+    .maybeSingle();
+  
+  if (error || !data) {
+    return null;
+  }
+  return data;
+}
+
+// Save progress to database
+async function saveProgress(progress: {
+  is_active: boolean;
+  source_channel?: string;
+  dest_channel?: string;
+  start_id?: number;
+  end_id?: number;
+  current_batch?: number;
+  total_batches?: number;
+  success_count?: number;
+  failed_count?: number;
+  skipped_count?: number;
+  total_count?: number;
+  rate_limit_hits?: number;
+  speed?: number;
+  started_at?: string;
+  stop_requested?: boolean;
+}) {
+  const { error } = await supabase
+    .from('forwarding_progress')
+    .upsert({ 
+      id: 'current',
+      ...progress,
+      last_updated_at: new Date().toISOString()
+    }, { onConflict: 'id' });
+  
+  if (error) {
+    console.error('Error saving progress:', error);
+  }
+}
+
+// Check if stop was requested
+async function isStopRequested(): Promise<boolean> {
+  const progress = await loadProgress();
+  return progress?.stop_requested === true;
+}
+
+// Request stop
+async function requestStop() {
+  await saveProgress({ is_active: true, stop_requested: true });
 }
 
 async function sendTelegramRequest(method: string, params: Record<string, unknown>) {
@@ -218,12 +258,18 @@ Now use /setconfig to configure channels.`;
       if (!statusConfig) {
         return '⚠️ Bot not configured. Use /setconfig first.';
       }
-      const statusText = liveProgress.isRunning 
-        ? `🔄 Forwarding in progress...
-✅ Success: ${liveProgress.success}
-❌ Failed: ${liveProgress.failed}
-⏱️ Speed: ${Math.round(liveProgress.success / ((Date.now() - liveProgress.startTime) / 60000))} files/min`
-        : '💤 Idle';
+      const statusProgress = await loadProgress();
+      let statusText = '💤 Idle';
+      if (statusProgress?.is_active) {
+        const elapsed = statusProgress.started_at 
+          ? (Date.now() - new Date(statusProgress.started_at).getTime()) / 60000 
+          : 1;
+        const speed = Math.round((statusProgress.success_count || 0) / elapsed);
+        statusText = `🔄 Forwarding in progress...
+✅ Success: ${statusProgress.success_count || 0}
+❌ Failed: ${statusProgress.failed_count || 0}
+⏱️ Speed: ${speed} files/min`;
+      }
       return `📊 <b>Bot Status</b>
 
 📤 Source: <code>${statusConfig.sourceChannel}</code>
@@ -263,22 +309,29 @@ ${statusText}`;
       return ''; // Already sent initial message
 
     case '/stop':
-      stopForwarding = true;
+      await requestStop();
       return '🛑 Stop signal sent. Forwarding will stop after current batch.';
 
     case '/progress':
-      if (!liveProgress.isRunning) {
+      const progressData = await loadProgress();
+      if (!progressData?.is_active) {
         return '💤 No forwarding in progress.';
       }
-      const elapsedSec = (Date.now() - liveProgress.startTime) / 1000;
-      const speed = elapsedSec > 0 ? Math.round(liveProgress.success / elapsedSec * 60) : 0;
-      const percent = liveProgress.total > 0 ? Math.round((liveProgress.success / liveProgress.total) * 100) : 0;
+      const elapsedMs = progressData.started_at 
+        ? Date.now() - new Date(progressData.started_at).getTime() 
+        : 0;
+      const elapsedSec = elapsedMs / 1000;
+      const speed = elapsedSec > 0 ? Math.round((progressData.success_count || 0) / elapsedSec * 60) : 0;
+      const percent = progressData.total_count > 0 
+        ? Math.round(((progressData.success_count || 0) / progressData.total_count) * 100) 
+        : 0;
       return `📊 <b>Live Progress</b>
 
-✅ Success: ${liveProgress.success} / ${liveProgress.total} (${percent}%)
-❌ Failed: ${liveProgress.failed}
-⚡ Rate limits: ${liveProgress.rateLimitHits}
+✅ Success: ${progressData.success_count || 0} / ${progressData.total_count || 0} (${percent}%)
+❌ Failed: ${progressData.failed_count || 0}
+⚡ Rate limits: ${progressData.rate_limit_hits || 0}
 🚀 Speed: ${speed} files/min
+📦 Batch: ${progressData.current_batch || 0} / ${progressData.total_batches || 0}
 ⏱️ Elapsed: ${Math.round(elapsedSec)}s`;
 
     default:
@@ -362,6 +415,13 @@ async function getWebhookInfo() {
   return sendTelegramRequest('getWebhookInfo', {});
 }
 
+// Local progress tracking for current execution
+let localProgress = {
+  rateLimitHits: 0,
+  success: 0,
+  failed: 0,
+};
+
 // Copy messages with retry on rate limit
 async function copyMessagesWithRetry(
   fromChatId: string, 
@@ -382,9 +442,9 @@ async function copyMessagesWithRetry(
     
     // Rate limited - wait and retry
     if (result.error_code === 429) {
-      liveProgress.rateLimitHits++;
+      localProgress.rateLimitHits++;
       const waitTime = (result.parameters?.retry_after || 5) * 1000;
-      console.log(`Rate limited (${liveProgress.rateLimitHits} total), waiting ${waitTime/1000}s...`);
+      console.log(`Rate limited (${localProgress.rateLimitHits} total), waiting ${waitTime/1000}s...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
       continue;
     }
@@ -402,28 +462,35 @@ async function bulkForward(
   startId: number, 
   endId: number
 ): Promise<{ success: number; failed: number; skipped: number; total: number; stopped: boolean; rateLimitHits: number }> {
-  stopForwarding = false;
-  
   const total = endId - startId + 1;
   
-  // Reset and init live progress
-  liveProgress = {
-    isRunning: true,
-    success: 0,
-    failed: 0,
-    skipped: 0,
-    total,
-    rateLimitHits: 0,
-    startTime: Date.now(),
-    currentBatch: 0,
-    totalBatches: 0,
-  };
+  // Reset local progress
+  localProgress = { rateLimitHits: 0, success: 0, failed: 0 };
+  
+  // Init progress in database
+  await saveProgress({
+    is_active: true,
+    source_channel: sourceChannel,
+    dest_channel: destChannel,
+    start_id: startId,
+    end_id: endId,
+    current_batch: 0,
+    total_batches: 0,
+    success_count: 0,
+    failed_count: 0,
+    skipped_count: 0,
+    total_count: total,
+    rate_limit_hits: 0,
+    speed: 0,
+    started_at: new Date().toISOString(),
+    stop_requested: false,
+  });
   
   console.log(`Forwarding ${total} messages at max speed`);
   
   // Telegram limit: 100 messages per copyMessages call
   const batchSize = 100;
-  const parallelBatches = 10; // Balanced: 10 parallel = 1000 msgs/cycle (avoids rate limits)
+  const parallelBatches = 10;
   
   // Create all batches
   const batches: number[][] = [];
@@ -435,25 +502,27 @@ async function bulkForward(
     batches.push(batch);
   }
   
-  liveProgress.totalBatches = batches.length;
-  console.log(`Total batches: ${batches.length}, processing ${parallelBatches} in parallel`);
+  const totalBatches = batches.length;
+  await saveProgress({ is_active: true, total_batches: totalBatches });
+  console.log(`Total batches: ${totalBatches}, processing ${parallelBatches} in parallel`);
   
   // Process all batches in parallel groups
   for (let i = 0; i < batches.length; i += parallelBatches) {
-    if (stopForwarding) {
+    // Check stop flag from database
+    if (await isStopRequested()) {
       console.log('Stopped by user');
-      liveProgress.isRunning = false;
+      await saveProgress({ is_active: false, stop_requested: false });
       return { 
-        success: liveProgress.success, 
-        failed: liveProgress.failed, 
-        skipped: liveProgress.skipped, 
+        success: localProgress.success, 
+        failed: localProgress.failed, 
+        skipped: 0, 
         total, 
         stopped: true,
-        rateLimitHits: liveProgress.rateLimitHits
+        rateLimitHits: localProgress.rateLimitHits
       };
     }
     
-    liveProgress.currentBatch = Math.min(i + parallelBatches, batches.length);
+    const currentBatch = Math.min(i + parallelBatches, batches.length);
     const group = batches.slice(i, i + parallelBatches);
     console.log(`Group ${Math.floor(i / parallelBatches) + 1}/${Math.ceil(batches.length / parallelBatches)}`);
     
@@ -461,7 +530,6 @@ async function bulkForward(
       group.map(async (batch) => {
         const result = await copyMessagesWithRetry(sourceChannel, destChannel, batch);
         if (result.ok) {
-          // Save in background - don't wait
           saveForwardedMessageIds(sourceChannel, destChannel, batch);
           return { success: batch.length, failed: 0 };
         }
@@ -470,19 +538,30 @@ async function bulkForward(
     );
     
     for (const r of results) {
-      liveProgress.success += r.success;
-      liveProgress.failed += r.failed;
+      localProgress.success += r.success;
+      localProgress.failed += r.failed;
     }
+    
+    // Update progress in database every group
+    await saveProgress({
+      is_active: true,
+      current_batch: currentBatch,
+      success_count: localProgress.success,
+      failed_count: localProgress.failed,
+      rate_limit_hits: localProgress.rateLimitHits,
+    });
   }
   
-  liveProgress.isRunning = false;
+  // Mark as complete
+  await saveProgress({ is_active: false, stop_requested: false });
+  
   return { 
-    success: liveProgress.success, 
-    failed: liveProgress.failed, 
-    skipped: liveProgress.skipped, 
+    success: localProgress.success, 
+    failed: localProgress.failed, 
+    skipped: 0, 
     total, 
     stopped: false,
-    rateLimitHits: liveProgress.rateLimitHits
+    rateLimitHits: localProgress.rateLimitHits
   };
 }
 
@@ -586,21 +665,39 @@ serve(async (req) => {
         );
 
       case 'progress':
-        const elapsedMs = liveProgress.startTime ? Date.now() - liveProgress.startTime : 0;
-        const elapsedSec = elapsedMs / 1000;
-        const speed = elapsedSec > 0 ? Math.round(liveProgress.success / elapsedSec * 60) : 0;
+        const dbProgress = await loadProgress();
+        if (!dbProgress) {
+          return new Response(
+            JSON.stringify({ isRunning: false }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        const progressElapsedMs = dbProgress.started_at 
+          ? Date.now() - new Date(dbProgress.started_at).getTime() 
+          : 0;
+        const progressElapsedSec = progressElapsedMs / 1000;
+        const progressSpeed = progressElapsedSec > 0 
+          ? Math.round((dbProgress.success_count || 0) / progressElapsedSec * 60) 
+          : 0;
         
         return new Response(
           JSON.stringify({
-            ...liveProgress,
-            elapsedSeconds: Math.round(elapsedSec),
-            speedPerMinute: speed,
+            isRunning: dbProgress.is_active,
+            success: dbProgress.success_count || 0,
+            failed: dbProgress.failed_count || 0,
+            skipped: dbProgress.skipped_count || 0,
+            total: dbProgress.total_count || 0,
+            rateLimitHits: dbProgress.rate_limit_hits || 0,
+            currentBatch: dbProgress.current_batch || 0,
+            totalBatches: dbProgress.total_batches || 0,
+            elapsedSeconds: Math.round(progressElapsedSec),
+            speedPerMinute: progressSpeed,
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
 
       case 'stop':
-        stopForwarding = true;
+        await requestStop();
         console.log('Stop signal received');
         return new Response(
           JSON.stringify({ success: true, message: 'Stop signal sent' }),

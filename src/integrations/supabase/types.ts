@@ -62,6 +62,66 @@ export type Database = {
         }
         Relationships: []
       }
+      forwarding_progress: {
+        Row: {
+          current_batch: number | null
+          dest_channel: string | null
+          end_id: number | null
+          failed_count: number | null
+          id: string
+          is_active: boolean
+          last_updated_at: string | null
+          rate_limit_hits: number | null
+          skipped_count: number | null
+          source_channel: string | null
+          speed: number | null
+          start_id: number | null
+          started_at: string | null
+          stop_requested: boolean | null
+          success_count: number | null
+          total_batches: number | null
+          total_count: number | null
+        }
+        Insert: {
+          current_batch?: number | null
+          dest_channel?: string | null
+          end_id?: number | null
+          failed_count?: number | null
+          id?: string
+          is_active?: boolean
+          last_updated_at?: string | null
+          rate_limit_hits?: number | null
+          skipped_count?: number | null
+          source_channel?: string | null
+          speed?: number | null
+          start_id?: number | null
+          started_at?: string | null
+          stop_requested?: boolean | null
+          success_count?: number | null
+          total_batches?: number | null
+          total_count?: number | null
+        }
+        Update: {
+          current_batch?: number | null
+          dest_channel?: string | null
+          end_id?: number | null
+          failed_count?: number | null
+          id?: string
+          is_active?: boolean
+          last_updated_at?: string | null
+          rate_limit_hits?: number | null
+          skipped_count?: number | null
+          source_channel?: string | null
+          speed?: number | null
+          start_id?: number | null
+          started_at?: string | null
+          stop_requested?: boolean | null
+          success_count?: number | null
+          total_batches?: number | null
+          total_count?: number | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
