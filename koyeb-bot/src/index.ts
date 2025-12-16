@@ -308,8 +308,7 @@ async function showMainMenu(chatId: number) {
   const keyboard = {
     inline_keyboard: [
       [
-        { text: '🚀 Forward', callback_data: 'forward' },
-        { text: '⚙️ Set Config', callback_data: 'config' }
+        { text: '🚀 Forward', callback_data: 'forward' }
       ],
       [
         { text: '▶️ Resume', callback_data: 'resume' },
@@ -317,9 +316,6 @@ async function showMainMenu(chatId: number) {
       ],
       [
         { text: '📊 Progress', callback_data: 'progress' },
-        { text: '📡 Status', callback_data: 'status' }
-      ],
-      [
         { text: '❓ Help', callback_data: 'help' }
       ]
     ]
