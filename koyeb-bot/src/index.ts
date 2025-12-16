@@ -1153,21 +1153,12 @@ async function handleCallbackQuery(callbackQuery: any) {
       return;
     }
 
-    if (typeof messageId === 'number') {
-      await editMessageText(
-        chatId,
-        messageId,
-        '✅ Forwarding started. Use /progress to check status.',
-        { inline_keyboard: [] }
-      );
-    }
-
     await saveBotConfig(session.source_channel, session.dest_channel);
 
     const endId = session.last_message_id;
     const startId = 1 + session.skip_number;
 
-    await saveProgress({
+    const progressData = {
       source_channel: session.source_channel,
       dest_channel: session.dest_channel,
       start_id: startId,
@@ -1183,9 +1174,23 @@ async function handleCallbackQuery(callbackQuery: any) {
       started_at: new Date(),
       rate_limit_hits: 0,
       speed: 0,
-    });
+    };
+
+    await saveProgress(progressData);
 
     await clearUserSession(chatId);
+
+    // Show progress status directly
+    if (typeof messageId === 'number') {
+      await editMessageText(
+        chatId,
+        messageId,
+        formatProgressText(progressData),
+        { inline_keyboard: progressButtons(progressData) }
+      );
+      // Store messageId for progress updates
+      await setUserSession(chatId, { last_message_id: messageId });
+    }
 
     // Run forwarding in background
     bulkForward(session.source_channel, session.dest_channel, startId, endId, false, chatId);
