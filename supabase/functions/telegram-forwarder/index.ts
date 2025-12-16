@@ -9,9 +9,36 @@ const corsHeaders = {
 const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+const RUN_TOKEN = Deno.env.get('TELEGRAM_FORWARDER_RUN_TOKEN');
 
 const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+const FUNCTION_URL = `${SUPABASE_URL}/functions/v1/telegram-forwarder`;
+
+// Self-call to continue forwarding (24/7 auto-run)
+async function triggerContinue(sourceChannel: string, destChannel: string, startId: number, endId: number, chatId?: number) {
+  console.log('Triggering self-continue...', { sourceChannel, destChannel, startId, endId });
+  try {
+    const response = await fetch(FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'auto-continue',
+        token: RUN_TOKEN,
+        sourceChannel,
+        destChannel,
+        startId,
+        endId,
+        chatId,
+      }),
+    });
+    console.log('Self-continue triggered, status:', response.status);
+    return response.ok;
+  } catch (error) {
+    console.error('Failed to trigger continue:', error);
+    return false;
+  }
+}
 
 // Session states
 const STATES = {
@@ -523,16 +550,32 @@ async function bulkForward(
       speed: speed,
     });
 
-    // Time-slice: if we're nearing runtime limits, schedule next chunk automatically.
+    // Time-slice: if we're nearing runtime limits, trigger self-call to continue
     if (currentId <= endId && Date.now() - runStartedAt > runMaxMs) {
-      console.log('Time slice reached, scheduling next chunk...', { currentId, endId, batchNum });
+      console.log('Time slice reached, triggering auto-continue...', { currentId, endId, batchNum });
+      
+      // Save progress before triggering continue
+      await saveProgress({
+        source_channel: sourceChannel,
+        dest_channel: destChannel,
+        start_id: startId,
+        end_id: endId,
+        current_batch: batchNum,
+        total_batches: totalBatches,
+        success_count: successCount,
+        failed_count: failedCount,
+        skipped_count: skippedCount,
+        total_count: endId - startId + 1,
+        rate_limit_hits: rateLimitHits,
+        is_active: true,
+        stop_requested: false,
+        speed: Math.round(successCount / Math.max((Date.now() - startTime) / 60000, 0.001)),
+      });
 
-      const task = bulkForward(sourceChannel, destChannel, currentId, endId, true, chatId, runMaxMs);
-      // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
-      if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
-      else await task;
-
-      return { success: successCount, failed: failedCount, needsResume: false };
+      // Trigger self-call to continue (fire and forget)
+      triggerContinue(sourceChannel, destChannel, currentId, endId, chatId);
+      
+      return { success: successCount, failed: failedCount, needsResume: false, continued: true };
     }
   }
 
@@ -732,11 +775,34 @@ serve(async (req) => {
     }
 
     // API actions
-    const { action, sourceChannel, destChannel, startMessageId, endMessageId } = body;
+    const { action, sourceChannel, destChannel, startMessageId, endMessageId, token, startId, endId, chatId: bodyChatId } = body;
     console.log('Received action:', action, { sourceChannel, destChannel, startMessageId, endMessageId });
 
     if (!action) {
       return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // Auto-continue action (secured by token) - for 24/7 operation
+    if (action === 'auto-continue') {
+      if (token !== RUN_TOKEN) {
+        console.log('Invalid token for auto-continue');
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      
+      console.log('Auto-continue triggered', { sourceChannel, startId, endId });
+      
+      // Check if stop was requested
+      if (await isStopRequested()) {
+        console.log('Stop was requested, not continuing');
+        return new Response(JSON.stringify({ stopped: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      
+      // Run in background
+      const task = bulkForward(sourceChannel, destChannel, startId, endId, true, bodyChatId);
+      // @ts-ignore
+      if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
+      
+      return new Response(JSON.stringify({ ok: true, continuing: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     if (action === 'configure') {
