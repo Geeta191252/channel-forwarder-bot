@@ -1,13 +1,16 @@
-FROM node:18-alpine
+FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm install
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-RUN npm run build
+# Copy application
+COPY main.py .
 
+# Expose port
 EXPOSE 8000
 
-CMD ["npm", "start"]
+# Run the bot
+CMD ["python", "main.py"]

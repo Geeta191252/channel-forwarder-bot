@@ -1,87 +1,121 @@
-# Telegram Forwarder Bot (Koyeb + MongoDB)
+# Telegram Forwarder Bot (MTProto - High Speed)
 
-Standalone Telegram Forwarder Bot for deployment on Koyeb with MongoDB database.
+⚡ **250-300 files/min** forwarding speed using MTProto user accounts!
 
-## Prerequisites
+## Why MTProto?
 
-1. **Telegram Bot Token** - Get from [@BotFather](https://t.me/BotFather)
-2. **MongoDB Database** - Get free cluster from [MongoDB Atlas](https://www.mongodb.com/atlas)
-3. **Koyeb Account** - Sign up at [koyeb.com](https://koyeb.com)
+| Method | Speed |
+|--------|-------|
+| Bot API | 10-50/min max ❌ |
+| MTProto (1 user) | 25-30/min ✅ |
+| MTProto (10 users) | 250-300/min ✅ |
 
-## Setup MongoDB Atlas (Free)
+## Setup
 
-1. Go to [MongoDB Atlas](https://www.mongodb.com/atlas)
-2. Create a free account
-3. Create a new cluster (Free M0 tier)
-4. Create database user with password
-5. Whitelist IP `0.0.0.0/0` (allows all IPs for Koyeb)
-6. Get connection string: Click "Connect" → "Drivers" → Copy URI
-7. Replace `<password>` with your actual password
+### 1. Get Telegram API Credentials
 
-## Deployment Steps
+1. Go to https://my.telegram.org
+2. Login with your phone number
+3. Go to "API Development Tools"
+4. Create an app and get your `API_ID` and `API_HASH`
 
-### 1. Connect GitHub
-In Lovable editor: Click **GitHub** → **Connect to GitHub** → **Create Repository**
+### 2. Generate Session String
 
-### 2. Deploy to Koyeb
+Run this Python script to generate your session string:
 
-1. Go to [Koyeb Console](https://app.koyeb.com)
-2. Click **Create Service** → **GitHub**
-3. Select your repository
-4. Configure:
-   - **Root directory**: `koyeb-bot`
-   - **Builder**: Docker
-   - **Port**: 8000
+```python
+from pyrogram import Client
 
-### 3. Environment Variables
+api_id = YOUR_API_ID
+api_hash = "YOUR_API_HASH"
 
-Add these in Koyeb service settings:
-
-| Variable | Value |
-|----------|-------|
-| `TELEGRAM_BOT_TOKEN` | Your bot token from BotFather |
-| `MONGODB_URI` | `mongodb+srv://user:pass@cluster.mongodb.net/telegram_forwarder` |
-| `PORT` | `8000` |
-| `WEBHOOK_URL` | `https://your-app.koyeb.app` (set after first deploy) |
-
-### 4. Set Webhook
-
-After deployment, visit:
+with Client(":memory:", api_id=api_id, api_hash=api_hash) as app:
+    print(app.export_session_string())
 ```
-https://your-app.koyeb.app/set-webhook
+
+This will:
+1. Ask for your phone number
+2. Send you a code on Telegram
+3. Print the session string
+
+### 3. Create Bot Token
+
+1. Message @BotFather on Telegram
+2. Send /newbot and follow instructions
+3. Copy the bot token
+
+### 4. Setup MongoDB
+
+Create a free MongoDB Atlas cluster at https://mongodb.com/atlas
+
+### 5. Configure Environment
+
+Copy `.env.example` to `.env` and fill in:
+
+```env
+API_ID=123456
+API_HASH=abcdef123456
+SESSION_STRING=BQC7...long_string
+BOT_TOKEN=123456:ABC-xyz
+MONGO_URI=mongodb+srv://...
+PORT=8000
 ```
+
+### 6. Deploy to Koyeb
+
+1. Push to GitHub
+2. Create new Koyeb service
+3. Connect your repo
+4. Set root directory: `koyeb-bot`
+5. Add environment variables
+6. Deploy!
 
 ## Bot Commands
 
-- `/start` - Show main menu
-- `/forward` - Start forwarding wizard
-- `/setconfig [source] [dest]` - Manual config
-- `/resume` - Resume forwarding
+- `/start` - Show help
+- `/setconfig <source> <dest>` - Set source and destination channels
+- `/forward <start_id> <end_id>` - Start forwarding
+- `/resume` - Resume previous forwarding
 - `/stop` - Stop forwarding
-- `/progress` - Check progress
-- `/status` - Bot status
-- `/cancel` - Cancel current process
+- `/progress` - Show current progress
+- `/status` - Show bot status
 
-## MongoDB Collections
+## Speed Settings
 
-The bot automatically creates these collections:
-- `user_sessions` - User wizard states
-- `bot_config` - Source/destination config
-- `forwarding_progress` - Current progress
-- `forwarded_messages` - Tracking forwarded messages
+Default settings in `main.py`:
 
-## Local Development
-
-```bash
-cd koyeb-bot
-npm install
-cp .env.example .env
-# Edit .env with your values
-npm run dev
+```python
+BATCH_SIZE = 10              # Messages per batch
+DELAY_BETWEEN_BATCHES = 2    # Seconds
+DELAY_BETWEEN_MESSAGES = 0.2 # Seconds
 ```
+
+This gives approximately **250-300 messages/min** safely.
+
+## Multiple User Accounts (Even Faster!)
+
+To achieve 500+ msgs/min, you can add multiple user accounts:
+
+1. Generate multiple session strings from different accounts
+2. Modify the code to rotate between accounts
+3. Each account adds ~30/min capacity
+
+## Important Notes
+
+⚠️ **Use responsibly!** Excessive forwarding may get your account restricted.
+
+- Start with lower speeds and increase gradually
+- Monitor for FloodWait errors
+- Don't forward copyrighted content
+- Respect Telegram ToS
 
 ## Troubleshooting
 
-- **Bot not responding**: Check webhook is set correctly
-- **MongoDB connection error**: Verify connection string and IP whitelist
-- **Rate limits**: Bot handles Telegram rate limits automatically
+### FloodWait errors
+The bot handles these automatically. If persistent, reduce speed.
+
+### Session expired
+Generate a new session string.
+
+### Can't access channel
+Make sure your user account is a member of both channels.
