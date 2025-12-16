@@ -1140,7 +1140,6 @@ async function handleCallbackQuery(callbackQuery: any) {
   else if (data === 'confirm_forward') {
     const session = await getUserSession(chatId);
     if (!session || session.state !== STATES.CONFIRMING) {
-      await sendMessage(chatId, '❌ Session expired. Please start again with /forward');
       return;
     }
     
