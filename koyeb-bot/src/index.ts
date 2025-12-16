@@ -15,25 +15,54 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
 // MongoDB setup
 let db: Db;
+
+// Documents that use string _id values (we use fixed IDs like 'config' and 'current')
+type BotConfigDoc = {
+  _id: 'config';
+  source_channel: string;
+  dest_channel: string;
+  updated_at?: Date;
+};
+
+type ProgressDoc = {
+  _id: 'current';
+  source_channel?: string | null;
+  dest_channel?: string | null;
+  start_id?: number | null;
+  end_id?: number | null;
+  current_batch?: number | null;
+  total_batches?: number | null;
+  total_count?: number | null;
+  success_count?: number | null;
+  failed_count?: number | null;
+  skipped_count?: number | null;
+  rate_limit_hits?: number | null;
+  is_active?: boolean;
+  stop_requested?: boolean | null;
+  speed?: number | null;
+  started_at?: Date | string | null;
+  last_updated_at?: Date;
+};
+
 let userSessions: Collection;
-let botConfig: Collection;
-let forwardingProgress: Collection;
+let botConfig: Collection<BotConfigDoc>;
+let forwardingProgress: Collection<ProgressDoc>;
 let forwardedMessages: Collection;
 
 async function connectMongoDB() {
   const client = new MongoClient(MONGODB_URI);
   await client.connect();
   db = client.db('telegram_forwarder');
-  
+
   userSessions = db.collection('user_sessions');
-  botConfig = db.collection('bot_config');
-  forwardingProgress = db.collection('forwarding_progress');
+  botConfig = db.collection<BotConfigDoc>('bot_config');
+  forwardingProgress = db.collection<ProgressDoc>('forwarding_progress');
   forwardedMessages = db.collection('forwarded_messages');
-  
+
   // Create indexes
   await userSessions.createIndex({ user_id: 1 }, { unique: true });
   await forwardedMessages.createIndex({ source_channel: 1, dest_channel: 1, source_message_id: 1 });
-  
+
   console.log('✅ Connected to MongoDB');
 }
 
