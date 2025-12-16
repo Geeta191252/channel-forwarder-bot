@@ -181,14 +181,55 @@ function formatProgressText(progress: any) {
     ? (progress?.stop_requested ? '⏸️ Stopping' : '🔄 Running')
     : '✅ Complete';
 
+  // Calculate elapsed time
+  let elapsedStr = '-';
+  if (progress?.started_at) {
+    const startedAt = new Date(progress.started_at).getTime();
+    const elapsedMs = Date.now() - startedAt;
+    const elapsedMins = Math.floor(elapsedMs / 60000);
+    const elapsedHrs = Math.floor(elapsedMins / 60);
+    const elapsedDays = Math.floor(elapsedHrs / 24);
+    
+    if (elapsedDays > 0) {
+      elapsedStr = `${elapsedDays}d ${elapsedHrs % 24}h ${elapsedMins % 60}m`;
+    } else if (elapsedHrs > 0) {
+      elapsedStr = `${elapsedHrs}h ${elapsedMins % 60}m`;
+    } else {
+      elapsedStr = `${elapsedMins}m`;
+    }
+  }
+
+  // Calculate ETA (remaining time)
+  let etaStr = '-';
+  const speed = progress?.speed || 0;
+  const remaining = (progress?.total_count || 0) - (progress?.success_count || 0) - (progress?.skipped_count || 0) - (progress?.failed_count || 0);
+  
+  if (speed > 0 && remaining > 0 && progress?.is_active) {
+    const etaMins = Math.ceil(remaining / speed);
+    const etaHrs = Math.floor(etaMins / 60);
+    const etaDays = Math.floor(etaHrs / 24);
+    
+    if (etaDays > 0) {
+      etaStr = `${etaDays}d ${etaHrs % 24}h ${etaMins % 60}m`;
+    } else if (etaHrs > 0) {
+      etaStr = `${etaHrs}h ${etaMins % 60}m`;
+    } else {
+      etaStr = `${etaMins}m`;
+    }
+  } else if (!progress?.is_active) {
+    etaStr = 'Done';
+  }
+
   return (
     `📊 <b>Progress</b> ${status}\n\n` +
     `✅ Success: ${progress?.success_count || 0} / ${progress?.total_count || 0} (${percent}%)\n` +
     `❌ Failed: ${progress?.failed_count || 0}\n` +
     `⏭️ Skipped: ${progress?.skipped_count || 0}\n` +
     `⚡ Rate limits: ${progress?.rate_limit_hits || 0}\n` +
-    `🚀 Speed: ${progress?.speed || 0} files/min\n` +
-    `📦 Batch: ${progress?.current_batch || 0} / ${progress?.total_batches || 0}`
+    `🚀 Speed: ${speed} files/min\n` +
+    `📦 Batch: ${progress?.current_batch || 0} / ${progress?.total_batches || 0}\n\n` +
+    `⏱️ Elapsed: ${elapsedStr}\n` +
+    `⏳ ETA: ${etaStr}`
   );
 }
 
