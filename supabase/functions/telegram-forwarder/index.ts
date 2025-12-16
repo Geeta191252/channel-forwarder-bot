@@ -544,9 +544,9 @@ async function bulkForward(
   chatId?: number,
   runMaxMs: number = 25_000,
 ) {
-  // Safe batch size to avoid Telegram ban (50 messages with 2s delay)
-  const BATCH_SIZE = 50;
-  const SAFE_DELAY_MS = 2000; // 2 second delay between batches for safety
+  // Safe speed: 30 batch + 3s delay (~500 files/min) - recommended for daily use
+  const BATCH_SIZE = 30;
+  const SAFE_DELAY_MS = 3000; // 3 second delay between batches for safety
   const runStartedAt = Date.now();
 
   let currentId = startId;
