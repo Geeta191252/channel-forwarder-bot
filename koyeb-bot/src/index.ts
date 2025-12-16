@@ -792,16 +792,38 @@ async function handleWizardMessage(chatId: number, message: any) {
     }
     
     await setUserSession(chatId, {
-      state: STATES.WAITING_DEST,
       skip_number: skipNum,
     });
     
-    await sendMessage(chatId,
-      `<b>( SET DESTINATION CHAT )</b>\n\n` +
-      `Forward any message from the destination channel where you want to forward messages.\n` +
-      `/cancel - cancel this process`,
-      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel' }]] }
-    );
+    // Check if user has saved channels
+    const savedChannels = await userChannels.find({ user_id: chatId }).toArray();
+    
+    if (savedChannels.length > 0) {
+      // Show saved channels to select as destination
+      await setUserSession(chatId, { state: STATES.WAITING_DEST });
+      
+      const buttons: any[][] = [];
+      for (const ch of savedChannels) {
+        buttons.push([{ text: `📢 ${ch.channel_title || ch.channel_id}`, callback_data: `select_dest_${ch.channel_id}` }]);
+      }
+      buttons.push([{ text: '❌ Cancel', callback_data: 'cancel' }]);
+      
+      await sendMessage(chatId,
+        `<b>( SELECT DESTINATION CHAT )</b>\n\n` +
+        `Select a channel from your saved channels:`,
+        { inline_keyboard: buttons }
+      );
+    } else {
+      // No saved channels, ask to forward message
+      await setUserSession(chatId, { state: STATES.WAITING_DEST });
+      
+      await sendMessage(chatId,
+        `<b>( SET DESTINATION CHAT )</b>\n\n` +
+        `Forward any message from the destination channel where you want to forward messages.\n` +
+        `/cancel - cancel this process`,
+        { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel' }]] }
+      );
+    }
     return true;
   }
   
@@ -1074,6 +1096,47 @@ async function handleCallbackQuery(callbackQuery: any) {
     await sendMessage(chatId, '✅ Channel deleted!', {
       inline_keyboard: [[{ text: '🔙 Back', callback_data: 'channel' }]]
     });
+  }
+  else if (data.startsWith('select_dest_')) {
+    const channelId = data.replace('select_dest_', '');
+    const channel = await userChannels.findOne({ user_id: chatId, channel_id: channelId });
+    
+    if (!channel) {
+      await sendMessage(chatId, '❌ Channel not found.', {
+        inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]]
+      });
+      return;
+    }
+    
+    const session = await getUserSession(chatId);
+    
+    await setUserSession(chatId, {
+      state: STATES.CONFIRMING,
+      dest_channel: channel.channel_id,
+      dest_title: channel.channel_title,
+    });
+    
+    const updatedSession = await getUserSession(chatId);
+    const botInfo = await sendTelegramRequest('getMe', {});
+    const botUsername = botInfo?.result?.username || 'bot';
+    
+    await sendMessage(chatId,
+      `<u>DOUBLE CHECKING</u> ⚠️\n` +
+      `Before forwarding the messages Click the Yes button only after checking the following\n\n` +
+      `★ YOUR BOT: <a href="https://t.me/${botUsername}">${botUsername}</a>\n` +
+      `★ FROM CHANNEL: ${updatedSession?.source_title || 'Unknown'}\n` +
+      `★ TO CHANNEL: ${updatedSession?.dest_title || 'Unknown'}\n` +
+      `★ SKIP MESSAGES: ${updatedSession?.skip_number || 0}\n\n` +
+      `° <a href="https://t.me/${botUsername}">${botUsername}</a> must be admin in <b>TARGET CHAT</b> (${updatedSession?.dest_title})\n` +
+      `° If the <b>SOURCE CHAT</b> is private your userbot must be member or your bot must be admin in there also\n\n` +
+      `If the above is checked then the yes button can be clicked`,
+      { inline_keyboard: [
+        [
+          { text: 'Yes', callback_data: 'confirm_forward' },
+          { text: 'No', callback_data: 'cancel' }
+        ]
+      ]}
+    );
   }
   else if (data === 'confirm_forward') {
     const session = await getUserSession(chatId);
