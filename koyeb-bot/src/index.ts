@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 8000;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
 
-// Force Subscribe Channels (comma-separated: @channel1,@channel2 or channel IDs)
+// Force Subscribe Channels (comma-separated channel IDs like -1001234567890)
 const FORCE_SUB_CHANNELS = process.env.FORCE_SUB_CHANNELS 
   ? process.env.FORCE_SUB_CHANNELS.split(',').map(ch => ch.trim()).filter(ch => ch)
   : [];
@@ -20,6 +20,12 @@ const FORCE_SUB_CHANNELS = process.env.FORCE_SUB_CHANNELS
 // Channel names for display (comma-separated, same order as FORCE_SUB_CHANNELS)
 const FORCE_SUB_CHANNEL_NAMES = process.env.FORCE_SUB_CHANNEL_NAMES
   ? process.env.FORCE_SUB_CHANNEL_NAMES.split(',').map(name => name.trim())
+  : [];
+
+// Invite links for private channels/groups (comma-separated, same order as FORCE_SUB_CHANNELS)
+// Example: https://t.me/+ABC123,https://t.me/+XYZ789
+const FORCE_SUB_LINKS = process.env.FORCE_SUB_LINKS
+  ? process.env.FORCE_SUB_LINKS.split(',').map(link => link.trim())
   : [];
 
 // Check if user is admin
@@ -70,9 +76,14 @@ async function showForceSubscribe(chatId: number) {
   for (let i = 0; i < FORCE_SUB_CHANNELS.length; i++) {
     const channelId = FORCE_SUB_CHANNELS[i];
     const channelName = FORCE_SUB_CHANNEL_NAMES[i] || `Channel/Group ${i + 1}`;
-    const channelLink = channelId.startsWith('@') 
-      ? `https://t.me/${channelId.substring(1)}` 
-      : `https://t.me/c/${channelId.replace('-100', '')}`;
+    
+    // Use invite link if provided, otherwise generate from channel ID/username
+    let channelLink = FORCE_SUB_LINKS[i];
+    if (!channelLink) {
+      channelLink = channelId.startsWith('@') 
+        ? `https://t.me/${channelId.substring(1)}` 
+        : `https://t.me/c/${channelId.replace('-100', '')}`;
+    }
     
     buttons.push([{ text: `🔗 Join ${channelName} ✅`, url: channelLink }]);
   }
