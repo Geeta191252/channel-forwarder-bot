@@ -549,8 +549,12 @@ async function bulkForward(
   let rateLimitHits = isResume ? existingProgress?.rate_limit_hits || 0 : 0;
   let batchNum = isResume ? existingProgress?.current_batch || 0 : 0;
 
+  // Use original started_at for consistent speed calculation
+  const originalStartedAt = existingProgress?.started_at 
+    ? new Date(existingProgress.started_at).getTime() 
+    : Date.now();
+
   const totalBatches = Math.ceil((endId - startId + 1) / BATCH_SIZE);
-  const startTime = Date.now();
 
   while (currentId <= endId) {
     // Check for stop request
@@ -566,7 +570,8 @@ async function bulkForward(
         rate_limit_hits: rateLimitHits,
         is_active: true,
         stop_requested: true,
-        speed: Math.round(successCount / ((Date.now() - startTime) / 60000)),
+        speed: Math.round(successCount / Math.max((Date.now() - originalStartedAt) / 60000, 0.001)),
+        started_at: new Date(originalStartedAt).toISOString(),
       };
       await saveProgress(progressPayload);
       if (chatId) await updateWatchedProgressMessage(chatId, progressPayload);
@@ -614,7 +619,7 @@ async function bulkForward(
     currentId = batchEnd + 1;
 
     // Update progress
-    const elapsed = (Date.now() - startTime) / 60000;
+    const elapsed = (Date.now() - originalStartedAt) / 60000;
     const speed = Math.round(successCount / Math.max(elapsed, 0.001));
 
     const progressPayload = {
@@ -632,6 +637,7 @@ async function bulkForward(
       is_active: currentId <= endId,
       stop_requested: false,
       speed: speed,
+      started_at: new Date(originalStartedAt).toISOString(),
     };
 
     await saveProgress(progressPayload);
@@ -656,7 +662,8 @@ async function bulkForward(
         rate_limit_hits: rateLimitHits,
         is_active: true,
         stop_requested: false,
-        speed: Math.round(successCount / Math.max((Date.now() - startTime) / 60000, 0.001)),
+        speed: Math.round(successCount / Math.max((Date.now() - originalStartedAt) / 60000, 0.001)),
+        started_at: new Date(originalStartedAt).toISOString(),
       };
 
       await saveProgress(continueProgressPayload);
@@ -681,6 +688,7 @@ async function bulkForward(
     is_active: false,
     stop_requested: false,
     speed: 0,
+    started_at: new Date(originalStartedAt).toISOString(),
   };
   await saveProgress(completeProgressPayload);
   if (chatId) await updateWatchedProgressMessage(chatId, completeProgressPayload);
