@@ -318,8 +318,7 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
       speed: speed,
     });
 
-    // Small delay between batches
-    await new Promise(r => setTimeout(r, 500));
+    // No delay - maximum speed
   }
 
   // Complete
