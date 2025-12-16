@@ -83,7 +83,7 @@ async function clearUserSession(userId: number) {
       dest_channel: null,
       dest_title: null,
       skip_number: 0,
-      last_message_id: null,
+      // NOTE: keep last_message_id so we can keep auto-updating the latest /progress message
       updated_at: new Date().toISOString(),
     })
     .eq('user_id', userId);
@@ -165,6 +165,45 @@ async function editMessageText(chatId: string | number, messageId: number, text:
   const params: any = { chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML' };
   if (replyMarkup) params.reply_markup = replyMarkup;
   return sendTelegramRequest('editMessageText', params);
+}
+
+function progressButtons(progress: any) {
+  return progress?.is_active
+    ? [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]]
+    : [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }]];
+}
+
+function formatProgressText(progress: any) {
+  const percent = progress?.total_count
+    ? Math.round(((progress?.success_count || 0) / (progress?.total_count || 1)) * 100)
+    : 0;
+  const status = progress?.is_active
+    ? (progress?.stop_requested ? '⏸️ Stopping' : '🔄 Running')
+    : '✅ Complete';
+
+  return (
+    `📊 <b>Progress</b> ${status}\n\n` +
+    `✅ Success: ${progress?.success_count || 0} / ${progress?.total_count || 0} (${percent}%)\n` +
+    `❌ Failed: ${progress?.failed_count || 0}\n` +
+    `⏭️ Skipped: ${progress?.skipped_count || 0}\n` +
+    `⚡ Rate limits: ${progress?.rate_limit_hits || 0}\n` +
+    `🚀 Speed: ${progress?.speed || 0} files/min\n` +
+    `📦 Batch: ${progress?.current_batch || 0} / ${progress?.total_batches || 0}`
+  );
+}
+
+async function updateWatchedProgressMessage(chatId: number, progress: any) {
+  try {
+    const session = await getUserSession(chatId);
+    const messageId = session?.last_message_id;
+    if (!messageId) return;
+
+    await editMessageText(chatId, messageId, formatProgressText(progress), {
+      inline_keyboard: progressButtons(progress),
+    });
+  } catch (e) {
+    console.log('Progress auto-update skipped:', e);
+  }
 }
 
 async function copyMessages(fromChatId: string, toChatId: string, messageIds: number[]) {
@@ -318,24 +357,15 @@ async function handleCommand(chatId: number, text: string, message: any) {
       await sendMessage(chatId, '📊 No forwarding data');
       return;
     }
-    
-    const percent = progress.total_count ? Math.round((progress.success_count / progress.total_count) * 100) : 0;
-    const status = progress.is_active ? (progress.stop_requested ? '⏸️ Stopping' : '🔄 Running') : '✅ Complete';
-    
-    const buttons = progress.is_active 
-      ? [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]]
-      : [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }]];
-    
-    await sendMessage(chatId, 
-      `📊 <b>Progress</b> ${status}\n\n` +
-      `✅ Success: ${progress.success_count} / ${progress.total_count} (${percent}%)\n` +
-      `❌ Failed: ${progress.failed_count}\n` +
-      `⏭️ Skipped: ${progress.skipped_count}\n` +
-      `⚡ Rate limits: ${progress.rate_limit_hits}\n` +
-      `🚀 Speed: ${progress.speed} files/min\n` +
-      `📦 Batch: ${progress.current_batch} / ${progress.total_batches}`,
-      { inline_keyboard: buttons }
-    );
+
+    const sent = await sendMessage(chatId, formatProgressText(progress), {
+      inline_keyboard: progressButtons(progress),
+    });
+
+    // Save the progress message id so we can auto-update the SAME message while forwarding runs
+    if (sent?.ok && sent?.result?.message_id) {
+      await setUserSession(chatId, { last_message_id: sent.result.message_id });
+    }
   }
   
   else if (command === '/status') {
@@ -485,7 +515,7 @@ async function bulkForward(
     // Check for stop request
     if (await isStopRequested()) {
       console.log('Stop requested, saving progress...');
-      await saveProgress({
+      const progressPayload = {
         current_batch: batchNum,
         total_batches: totalBatches,
         success_count: successCount,
@@ -496,7 +526,9 @@ async function bulkForward(
         is_active: true,
         stop_requested: true,
         speed: Math.round(successCount / ((Date.now() - startTime) / 60000)),
-      });
+      };
+      await saveProgress(progressPayload);
+      if (chatId) await updateWatchedProgressMessage(chatId, progressPayload);
       if (chatId) await sendMessage(chatId, `⏹️ Stopped at batch ${batchNum}. Use /resume to continue.`);
       return { success: successCount, failed: failedCount, needsResume: true };
     }
@@ -544,7 +576,7 @@ async function bulkForward(
     const elapsed = (Date.now() - startTime) / 60000;
     const speed = Math.round(successCount / Math.max(elapsed, 0.001));
 
-    await saveProgress({
+    const progressPayload = {
       source_channel: sourceChannel,
       dest_channel: destChannel,
       start_id: startId,
@@ -559,14 +591,17 @@ async function bulkForward(
       is_active: currentId <= endId,
       stop_requested: false,
       speed: speed,
-    });
+    };
+
+    await saveProgress(progressPayload);
+    if (chatId) await updateWatchedProgressMessage(chatId, progressPayload);
 
     // Time-slice: if we're nearing runtime limits, trigger self-call to continue
     if (currentId <= endId && Date.now() - runStartedAt > runMaxMs) {
       console.log('Time slice reached, triggering auto-continue...', { currentId, endId, batchNum });
       
       // Save progress before triggering continue
-      await saveProgress({
+      const continueProgressPayload = {
         source_channel: sourceChannel,
         dest_channel: destChannel,
         start_id: startId,
@@ -581,7 +616,10 @@ async function bulkForward(
         is_active: true,
         stop_requested: false,
         speed: Math.round(successCount / Math.max((Date.now() - startTime) / 60000, 0.001)),
-      });
+      };
+
+      await saveProgress(continueProgressPayload);
+      if (chatId) await updateWatchedProgressMessage(chatId, continueProgressPayload);
 
       // Trigger self-call to continue (fire and forget)
       triggerContinue(sourceChannel, destChannel, currentId, endId, chatId);
@@ -591,7 +629,7 @@ async function bulkForward(
   }
 
   // Complete
-  await saveProgress({
+  const completeProgressPayload = {
     current_batch: batchNum,
     total_batches: totalBatches,
     success_count: successCount,
@@ -602,7 +640,9 @@ async function bulkForward(
     is_active: false,
     stop_requested: false,
     speed: 0,
-  });
+  };
+  await saveProgress(completeProgressPayload);
+  if (chatId) await updateWatchedProgressMessage(chatId, completeProgressPayload);
 
   if (chatId) {
     await sendMessage(chatId, `✅ <b>Forwarding Complete!</b>\n\n✅ Success: ${successCount}\n❌ Failed: ${failedCount}\n⏭️ Skipped: ${skippedCount}`);
@@ -713,24 +753,12 @@ async function handleCallbackQuery(callbackQuery: any) {
       await editMessageText(chatId, messageId, '📊 No forwarding data');
       return;
     }
-    
-    const percent = progress.total_count ? Math.round((progress.success_count / progress.total_count) * 100) : 0;
-    const status = progress.is_active ? (progress.stop_requested ? '⏸️ Stopping' : '🔄 Running') : '✅ Complete';
-    
-    const buttons = progress.is_active 
-      ? [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]]
-      : [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }]];
-    
-    await editMessageText(chatId, messageId, 
-      `📊 <b>Progress</b> ${status}\n\n` +
-      `✅ Success: ${progress.success_count} / ${progress.total_count} (${percent}%)\n` +
-      `❌ Failed: ${progress.failed_count}\n` +
-      `⏭️ Skipped: ${progress.skipped_count}\n` +
-      `⚡ Rate limits: ${progress.rate_limit_hits}\n` +
-      `🚀 Speed: ${progress.speed} files/min\n` +
-      `📦 Batch: ${progress.current_batch} / ${progress.total_batches}`,
-      { inline_keyboard: buttons }
-    );
+
+    await setUserSession(chatId, { last_message_id: messageId });
+
+    await editMessageText(chatId, messageId, formatProgressText(progress), {
+      inline_keyboard: progressButtons(progress),
+    });
   }
   else if (data === 'status') {
     await handleCommand(chatId, '/status', null);
