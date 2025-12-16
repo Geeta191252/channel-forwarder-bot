@@ -1138,16 +1138,35 @@ async function handleCallbackQuery(callbackQuery: any) {
     );
   }
   else if (data === 'confirm_forward') {
+    const messageId = callbackQuery.message?.message_id;
     const session = await getUserSession(chatId);
+
     if (!session || session.state !== STATES.CONFIRMING) {
+      if (typeof messageId === 'number') {
+        await editMessageText(
+          chatId,
+          messageId,
+          '❌ Session expired. Please start again with /forward',
+          { inline_keyboard: [] }
+        );
+      }
       return;
     }
-    
+
+    if (typeof messageId === 'number') {
+      await editMessageText(
+        chatId,
+        messageId,
+        '✅ Forwarding started. Use /progress to check status.',
+        { inline_keyboard: [] }
+      );
+    }
+
     await saveBotConfig(session.source_channel, session.dest_channel);
-    
+
     const endId = session.last_message_id;
     const startId = 1 + session.skip_number;
-    
+
     await saveProgress({
       source_channel: session.source_channel,
       dest_channel: session.dest_channel,
@@ -1165,9 +1184,9 @@ async function handleCallbackQuery(callbackQuery: any) {
       rate_limit_hits: 0,
       speed: 0,
     });
-    
+
     await clearUserSession(chatId);
-    
+
     // Run forwarding in background
     bulkForward(session.source_channel, session.dest_channel, startId, endId, false, chatId);
   }
