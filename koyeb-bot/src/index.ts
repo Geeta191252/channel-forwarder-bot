@@ -1246,8 +1246,8 @@ async function handleCallbackQuery(callbackQuery: any) {
 
     const endId = session.last_message_id || 0;
     const skipNumber = session.skip_number || 0;
-    // Skip number IS the starting message ID (user enters 291700 = start from msg 291700)
-    const startId = skipNumber > 0 ? skipNumber : 1;
+    // User enters the LAST skipped message ID (e.g. 291700 => start forwarding from 291701)
+    const startId = skipNumber > 0 ? (skipNumber + 1) : 1;
 
     const progressData = {
       source_channel: session.source_channel,
