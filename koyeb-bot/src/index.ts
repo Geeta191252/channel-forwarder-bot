@@ -364,6 +364,29 @@ function formatProgressText(progress: any) {
   const skipped = 0;
   const filtered = 0;
 
+  // Calculate elapsed time
+  let elapsedStr = '0s';
+  let etaStr = 'Calculating...';
+  
+  if (progress?.started_at) {
+    const startTime = new Date(progress.started_at).getTime();
+    const now = Date.now();
+    const elapsedMs = now - startTime;
+    elapsedStr = formatDuration(elapsedMs);
+    
+    // Calculate ETA based on speed
+    const processed = success + deleted + duplicate;
+    const remaining = fetched - processed;
+    
+    if (processed > 0 && remaining > 0) {
+      const msPerMsg = elapsedMs / processed;
+      const etaMs = msPerMsg * remaining;
+      etaStr = formatDuration(etaMs);
+    } else if (remaining <= 0) {
+      etaStr = 'Done';
+    }
+  }
+
   return (
     `<pre>` +
     `    ╔ FORWARD STATUS ╦═○؛✿\n` +
@@ -383,10 +406,37 @@ function formatProgressText(progress: any) {
     `│-≫ 📊 Cᴜʀʀᴇɴᴛ Sᴛᴀᴛᴜs: ${status}\n` +
     `│\n` +
     `│-≫ ◇ Pᴇʀᴄᴇɴᴛᴀɢᴇ: ${percent} %\n` +
+    `│\n` +
+    `│-≫ ⏱️ Eʟᴀᴘsᴇᴅ: ${elapsedStr}\n` +
+    `│\n` +
+    `│-≫ ⏳ ETA: ${etaStr}\n` +
     `└───────────────────────────➣\n` +
     `    ╚ PROGRESSING ╩═○؛✿\n` +
     `</pre>`
   );
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (days > 0) {
+    const remainingHours = hours % 24;
+    const remainingMins = minutes % 60;
+    return `${days}d ${remainingHours}h ${remainingMins}m`;
+  }
+  if (hours > 0) {
+    const remainingMins = minutes % 60;
+    const remainingSecs = seconds % 60;
+    return `${hours}h ${remainingMins}m ${remainingSecs}s`;
+  }
+  if (minutes > 0) {
+    const remainingSecs = seconds % 60;
+    return `${minutes}m ${remainingSecs}s`;
+  }
+  return `${seconds}s`;
 }
 
 async function updateWatchedProgressMessage(chatId: number, progress: any) {
