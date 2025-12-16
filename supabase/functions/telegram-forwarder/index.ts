@@ -260,14 +260,18 @@ async function handleCommand(chatId: number, text: string, message: any) {
       await sendMessage(chatId, '❌ No active forwarding to resume');
       return;
     }
-    
+
     const lastBatch = progress.current_batch || 0;
     const startId = (progress.start_id || 0) + (lastBatch * 100);
-    
+
     await saveProgress({ ...progress, stop_requested: false });
     await sendMessage(chatId, `▶️ Resuming from message ${startId}`);
-    
-    bulkForward(progress.source_channel, progress.dest_channel, startId, progress.end_id, true, chatId);
+
+    const task = bulkForward(progress.source_channel, progress.dest_channel, startId, progress.end_id, true, chatId);
+    // Keep running after responding to Telegram
+    // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+    if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
+    else await task;
   }
   
   else if (command === '/stop') {
@@ -601,14 +605,14 @@ async function handleCallbackQuery(callbackQuery: any) {
       ]}
     );
     
-    // Start forwarding in background
-    bulkForward(session.source_channel, session.dest_channel, startId, endId, false, chatId);
+    // Start forwarding in background (so user doesn't need to press Resume repeatedly)
+    const task = bulkForward(session.source_channel, session.dest_channel, startId, endId, false, chatId);
+    // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+    if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
+    else await task;
   }
   else if (data === 'resume') {
     await handleCommand(chatId, '/resume', null);
-  }
-  else if (data === 'stop' || data === 'stop_forward') {
-    await handleCommand(chatId, '/stop', null);
   }
   else if (data === 'progress') {
     await handleCommand(chatId, '/progress', null);
