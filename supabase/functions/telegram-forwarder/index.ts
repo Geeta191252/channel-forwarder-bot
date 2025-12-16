@@ -255,6 +255,14 @@ async function copyMessages(fromChatId: string, toChatId: string, messageIds: nu
   });
 }
 
+async function copyMessage(fromChatId: string, toChatId: string, messageId: number) {
+  return sendTelegramRequest('copyMessage', {
+    chat_id: toChatId,
+    from_chat_id: fromChatId,
+    message_id: messageId,
+  });
+}
+
 // Track forwarded messages
 async function getForwardedMessageIds(sourceChannel: string, destChannel: string, messageIds: number[]) {
   const { data } = await supabase
@@ -604,13 +612,45 @@ async function bulkForward(
           console.log(`Rate limited, waiting ${waitTime}s...`);
           await new Promise((r) => setTimeout(r, waitTime * 1000));
           retries++;
-        } else if (result.description?.includes('no messages to forward')) {
-          skippedCount += toForward.length;
-          success = true;
         } else {
-          failedCount += toForward.length;
-          console.log('Forward failed:', result);
-          success = true;
+          // Fallback: if batch fails because some message IDs are deleted/missing,
+          // try copying one-by-one so remaining messages still forward.
+          const desc = (result.description || '').toLowerCase();
+          const likelyMissing =
+            desc.includes('message to copy not found') ||
+            desc.includes('message_id_invalid') ||
+            desc.includes('message identifier is not specified') ||
+            desc.includes('no messages to forward');
+
+          if (likelyMissing) {
+            console.log('Batch copy failed due to missing/deleted msgs, falling back to single copy...', result);
+
+            const forwardedOk: number[] = [];
+            for (const id of toForward) {
+              const single = await copyMessage(sourceChannel, destChannel, id);
+              if (single?.ok) {
+                successCount += 1;
+                forwardedOk.push(id);
+              } else {
+                const sdesc = (single?.description || '').toLowerCase();
+                const missing =
+                  sdesc.includes('message to copy not found') ||
+                  sdesc.includes('message_id_invalid') ||
+                  sdesc.includes('no message') ||
+                  sdesc.includes('no messages to forward');
+
+                if (missing) skippedCount += 1;
+                else failedCount += 1;
+              }
+            }
+
+            if (forwardedOk.length) await saveForwardedMessageIds(sourceChannel, destChannel, forwardedOk);
+            success = true;
+          } else {
+            failedCount += toForward.length;
+            console.log('Forward failed:', result);
+            success = true;
+          }
         }
       }
     }
