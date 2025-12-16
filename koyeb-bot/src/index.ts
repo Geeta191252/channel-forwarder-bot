@@ -1087,13 +1087,14 @@ async function handleCallbackQuery(callbackQuery: any) {
 }
 
 // Bot username cache
-let botUsername: string | null = null;
+let cachedBotUsername: string | null = null;
 
 async function getBotUsername(): Promise<string> {
-  if (botUsername) return botUsername;
+  if (cachedBotUsername) return cachedBotUsername;
   const botInfo = await sendTelegramRequest('getMe', {});
-  botUsername = botInfo?.result?.username || 'bot';
-  return botUsername;
+  const username = botInfo?.result?.username || 'bot';
+  cachedBotUsername = username;
+  return username;
 }
 
 // Webhook handler
