@@ -548,9 +548,9 @@ async function bulkForward(
   isResume: boolean,
   chatId?: number,
 ) {
-  // Safe speed: 30 batch + 3s delay (~500 files/min) - recommended for daily use
-  const BATCH_SIZE = 30;
-  const SAFE_DELAY_MS = 3000; // 3 second delay between batches for safety
+  // Very Safe speed: 20 batch + 4s delay (~300 files/min) - for 24/7 continuous use
+  const BATCH_SIZE = 20;
+  const SAFE_DELAY_MS = 4000; // 4 second delay between batches for maximum safety
 
   let currentId = startId;
   const existingProgress = isResume ? await loadProgress() : null;
