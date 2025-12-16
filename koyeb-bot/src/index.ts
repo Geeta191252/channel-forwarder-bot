@@ -548,8 +548,9 @@ async function bulkForward(
   isResume: boolean,
   chatId?: number,
 ) {
-  // Maximum batch size for high-speed forwarding (Telegram limit is 100)
-  const BATCH_SIZE = 100;
+  // Safe batch size to avoid Telegram ban (50 messages with 2s delay)
+  const BATCH_SIZE = 50;
+  const SAFE_DELAY_MS = 2000; // 2 second delay between batches for safety
 
   let currentId = startId;
   const existingProgress = isResume ? await loadProgress() : null;
