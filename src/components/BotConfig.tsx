@@ -31,36 +31,39 @@ export function BotConfig({ onConfigSaved }: BotConfigProps) {
     setIsLoading(true);
     
     try {
-      const { data, error } = await supabase.functions.invoke("telegram-forwarder", {
-        body: { 
+      const { error } = await supabase.functions.invoke("telegram-forwarder", {
+        body: {
           action: "configure",
           sourceChannel,
-          destChannel 
+          destChannel,
         },
       });
 
       if (error) throw error;
 
-      // Auto-set webhook
-      const webhookUrl = `https://wqspxhsjujakaldaxhvm.supabase.co/functions/v1/telegram-forwarder`;
+      // Auto-set webhook (required for button clicks / callback_query)
+      const webhookBase = import.meta.env.VITE_SUPABASE_URL;
+      const webhookUrl = `${webhookBase}/functions/v1/telegram-forwarder`;
+
       const webhookResult = await supabase.functions.invoke("telegram-forwarder", {
         body: { action: "set-webhook", webhookUrl },
       });
 
       setIsConfigured(true);
       onConfigSaved({ sourceChannel, destChannel });
-      
+
       toast({
         title: "Configuration Saved",
-        description: webhookResult.data?.ok 
-          ? "Bot configured and webhook set successfully!" 
-          : "Config saved. Webhook may need manual setup.",
+        description: webhookResult.data?.ok
+          ? "Bot configured + webhook set. Buttons will work now."
+          : `Config saved but webhook failed: ${webhookResult.data?.description || "Unknown error"}`,
+        variant: webhookResult.data?.ok ? "default" : "destructive",
       });
     } catch (error) {
       console.error("Error saving config:", error);
       toast({
         title: "Configuration Error",
-        description: "Failed to save configuration. Check your channel IDs.",
+        description: "Failed to save configuration or set webhook. Please try again.",
         variant: "destructive",
       });
     } finally {
