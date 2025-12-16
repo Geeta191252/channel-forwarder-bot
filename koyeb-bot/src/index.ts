@@ -10,6 +10,12 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const MONGODB_URI = process.env.MONGODB_URI!;
 const PORT = process.env.PORT || 8000;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
+
+// Check if user is admin
+function isAdmin(userId: number): boolean {
+  return ADMIN_USER_ID !== null && userId === ADMIN_USER_ID;
+}
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
@@ -304,23 +310,31 @@ function extractChannelFromMessage(message: any): { chatId: string; title: strin
   return null;
 }
 
-async function showMainMenu(chatId: number) {
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '🚀 Forward', callback_data: 'forward' }
-      ],
-      [
-        { text: '▶️ Resume', callback_data: 'resume' },
-        { text: '⏹️ Stop', callback_data: 'stop' }
-      ],
-      [
-        { text: '📊 Progress', callback_data: 'progress' },
-        { text: '❓ Help', callback_data: 'help' }
-      ]
+async function showMainMenu(chatId: number, userId?: number) {
+  const buttons = [
+    [{ text: '🚀 Forward', callback_data: 'forward' }],
+    [
+      { text: '▶️ Resume', callback_data: 'resume' },
+      { text: '⏹️ Stop', callback_data: 'stop' }
+    ],
+    [
+      { text: '📊 Progress', callback_data: 'progress' },
+      { text: '❓ Help', callback_data: 'help' }
     ]
-  };
+  ];
+  
+  // Add Admin Panel button only for admin
+  if (userId && isAdmin(userId)) {
+    buttons.push([{ text: '👑 Admin Panel', callback_data: 'admin_panel' }]);
+  }
+  
+  const keyboard = { inline_keyboard: buttons };
   await sendMessage(chatId, `🤖 <b>Telegram Forwarder Bot</b>\n\nSelect an option below:`, keyboard);
+}
+
+// Get all users from database
+async function getAllUsers() {
+  return await userSessions.find({}).toArray();
 }
 
 // Bulk forward function
@@ -464,7 +478,7 @@ async function handleCommand(chatId: number, text: string, message: any) {
 
   if (command === '/start') {
     await clearUserSession(chatId);
-    await showMainMenu(chatId);
+    await showMainMenu(chatId, chatId);
   }
   
   else if (command === '/cancel') {
@@ -662,8 +676,46 @@ async function handleCallbackQuery(callbackQuery: any) {
   await sendTelegramRequest('answerCallbackQuery', { callback_query_id: callbackQueryId });
 
   if (data === 'menu') {
+    const userId = callbackQuery.from?.id;
     await clearUserSession(chatId);
-    await showMainMenu(chatId);
+    await showMainMenu(chatId, userId);
+  }
+  else if (data === 'admin_panel') {
+    const userId = callbackQuery.from?.id;
+    if (!userId || !isAdmin(userId)) {
+      await sendMessage(chatId, '❌ Access denied. Admin only.');
+      return;
+    }
+    
+    const users = await getAllUsers();
+    if (users.length === 0) {
+      await sendMessage(chatId, '👑 <b>Admin Panel</b>\n\n📭 No users found in database.', {
+        inline_keyboard: [[{ text: '🔙 Main Menu', callback_data: 'menu' }]]
+      });
+      return;
+    }
+    
+    let userList = '👑 <b>Admin Panel - Users Database</b>\n\n';
+    userList += `📊 Total Users: ${users.length}\n\n`;
+    
+    users.forEach((user, index) => {
+      const joinDate = user.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A';
+      const lastActive = user.updated_at ? new Date(user.updated_at).toLocaleDateString() : 'N/A';
+      userList += `<b>${index + 1}. User ID:</b> <code>${user.user_id}</code>\n`;
+      userList += `   📅 Joined: ${joinDate}\n`;
+      userList += `   🕐 Last Active: ${lastActive}\n`;
+      if (user.state && user.state !== 'idle') {
+        userList += `   📍 State: ${user.state}\n`;
+      }
+      userList += '\n';
+    });
+    
+    await sendMessage(chatId, userList, {
+      inline_keyboard: [
+        [{ text: '🔄 Refresh', callback_data: 'admin_panel' }],
+        [{ text: '🔙 Main Menu', callback_data: 'menu' }]
+      ]
+    });
   }
   else if (data === 'config') {
     await sendMessage(chatId, 
