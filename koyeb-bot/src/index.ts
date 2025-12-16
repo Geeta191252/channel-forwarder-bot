@@ -475,11 +475,7 @@ async function showMainMenu(chatId: number, userId?: number) {
       { text: '📢 Channel', callback_data: 'channel' }
     ],
     [
-      { text: '▶️ Resume', callback_data: 'resume' },
-      { text: '⏹️ Stop', callback_data: 'stop' }
-    ],
-    [
-      { text: '📊 Progress', callback_data: 'progress' },
+      { text: '⏹️ Stop', callback_data: 'stop' },
       { text: '❓ Help', callback_data: 'help' }
     ]
   ];
