@@ -504,11 +504,13 @@ serve(async (req) => {
 
     if (action === 'set-webhook') {
       const webhookUrl = body.webhookUrl;
+      console.log('Setting Telegram webhook to:', webhookUrl);
       const result = await sendTelegramRequest('setWebhook', {
         url: webhookUrl,
         allowed_updates: ['message', 'channel_post', 'callback_query'],
         drop_pending_updates: true,
       });
+      console.log('setWebhook result:', result);
       return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
