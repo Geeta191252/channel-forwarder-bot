@@ -339,66 +339,53 @@ async function editMessageText(chatId: string | number, messageId: number, text:
 }
 
 function progressButtons(progress: any) {
-  return progress?.is_active
-    ? [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]]
-    : [[{ text: '🔄 Refresh', callback_data: 'refresh_progress' }]];
+  if (progress?.is_active) {
+    return [
+      [{ text: '●○○○○○○○○○○○○○○○○○○○○', callback_data: 'refresh_progress' }],
+      [{ text: '• CANCEL', callback_data: 'stop_forward' }]
+    ];
+  }
+  return [[{ text: '🔙 Main Menu', callback_data: 'menu' }]];
 }
 
 function formatProgressText(progress: any) {
   const percent = progress?.total_count
     ? Math.round(((progress?.success_count || 0) / (progress?.total_count || 1)) * 100)
     : 0;
-  const status = progress?.is_active
-    ? (progress?.stop_requested ? '⏸️ Stopping' : '🔄 Running')
-    : '✅ Complete';
-
-  let elapsedStr = '-';
-  if (progress?.started_at) {
-    const startedAt = new Date(progress.started_at).getTime();
-    const elapsedMs = Date.now() - startedAt;
-    const elapsedMins = Math.floor(elapsedMs / 60000);
-    const elapsedHrs = Math.floor(elapsedMins / 60);
-    const elapsedDays = Math.floor(elapsedHrs / 24);
-    
-    if (elapsedDays > 0) {
-      elapsedStr = `${elapsedDays}d ${elapsedHrs % 24}h ${elapsedMins % 60}m`;
-    } else if (elapsedHrs > 0) {
-      elapsedStr = `${elapsedHrs}h ${elapsedMins % 60}m`;
-    } else {
-      elapsedStr = `${elapsedMins}m`;
-    }
-  }
-
-  let etaStr = '-';
-  const speed = progress?.speed || 0;
-  const remaining = (progress?.total_count || 0) - (progress?.success_count || 0) - (progress?.skipped_count || 0) - (progress?.failed_count || 0);
   
-  if (speed > 0 && remaining > 0 && progress?.is_active) {
-    const etaMins = Math.ceil(remaining / speed);
-    const etaHrs = Math.floor(etaMins / 60);
-    const etaDays = Math.floor(etaHrs / 24);
-    
-    if (etaDays > 0) {
-      etaStr = `${etaDays}d ${etaHrs % 24}h ${etaMins % 60}m`;
-    } else if (etaHrs > 0) {
-      etaStr = `${etaHrs}h ${etaMins % 60}m`;
-    } else {
-      etaStr = `${etaMins}m`;
-    }
-  } else if (!progress?.is_active) {
-    etaStr = 'Done';
-  }
+  const status = progress?.is_active
+    ? (progress?.stop_requested ? 'Stopping...' : 'Forwarding')
+    : 'Completed';
+
+  const fetched = progress?.total_count || 0;
+  const success = progress?.success_count || 0;
+  const duplicate = progress?.skipped_count || 0;
+  const deleted = progress?.failed_count || 0;
+  const skipped = 0;
+  const filtered = 0;
 
   return (
-    `📊 <b>Progress</b> ${status}\n\n` +
-    `✅ Success: ${progress?.success_count || 0} / ${progress?.total_count || 0} (${percent}%)\n` +
-    `❌ Failed: ${progress?.failed_count || 0}\n` +
-    `⏭️ Skipped: ${progress?.skipped_count || 0}\n` +
-    `⚡ Rate limits: ${progress?.rate_limit_hits || 0}\n` +
-    `🚀 Speed: ${speed} files/min\n` +
-    `📦 Batch: ${progress?.current_batch || 0} / ${progress?.total_batches || 0}\n\n` +
-    `⏱️ Elapsed: ${elapsedStr}\n` +
-    `⏳ ETA: ${etaStr}`
+    `<pre>` +
+    `    ╔ FORWARD STATUS ╦═○؛✿\n` +
+    `┌───────────────────────────➣\n` +
+    `│-≫ 👷 ғᴇᴄʜᴇᴅ Msɢ : ${fetched}\n` +
+    `│\n` +
+    `│-≫ ✅ sᴜᴄᴄᴇssғᴜʟʟʏ Fᴡᴅ : ${success}\n` +
+    `│\n` +
+    `│-≫ 👥 ᴅᴜᴘʟɪᴄᴀᴛᴇ Msɢ : ${duplicate}\n` +
+    `│\n` +
+    `│-≫ 🗑️ ᴅᴇʟᴇᴛᴇᴅ Msɢ : ${deleted}\n` +
+    `│\n` +
+    `│-≫ 🪆 Sᴋɪᴘᴘᴇᴅ Msɢ : ${skipped}\n` +
+    `│\n` +
+    `│-≫ 🔁 Fɪʟᴛᴇʀᴇᴅ Msɢ : ${filtered}\n` +
+    `│\n` +
+    `│-≫ 📊 Cᴜʀʀᴇɴᴛ Sᴛᴀᴛᴜs: ${status}\n` +
+    `│\n` +
+    `│-≫ ◇ Pᴇʀᴄᴇɴᴛᴀɢᴇ: ${percent} %\n` +
+    `└───────────────────────────➣\n` +
+    `    ╚ PROGRESSING ╩═○؛✿\n` +
+    `</pre>`
   );
 }
 
