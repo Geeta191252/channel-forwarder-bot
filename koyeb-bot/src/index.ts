@@ -1,5 +1,5 @@
 import express from 'express';
-import { createClient } from '@supabase/supabase-js';
+import { MongoClient, Db, Collection } from 'mongodb';
 import fetch from 'node-fetch';
 
 const app = express();
@@ -7,13 +7,35 @@ app.use(express.json());
 
 // Environment variables
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const MONGODB_URI = process.env.MONGODB_URI!;
 const PORT = process.env.PORT || 8000;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+
+// MongoDB setup
+let db: Db;
+let userSessions: Collection;
+let botConfig: Collection;
+let forwardingProgress: Collection;
+let forwardedMessages: Collection;
+
+async function connectMongoDB() {
+  const client = new MongoClient(MONGODB_URI);
+  await client.connect();
+  db = client.db('telegram_forwarder');
+  
+  userSessions = db.collection('user_sessions');
+  botConfig = db.collection('bot_config');
+  forwardingProgress = db.collection('forwarding_progress');
+  forwardedMessages = db.collection('forwarded_messages');
+  
+  // Create indexes
+  await userSessions.createIndex({ user_id: 1 }, { unique: true });
+  await forwardedMessages.createIndex({ source_channel: 1, dest_channel: 1, source_message_id: 1 });
+  
+  console.log('✅ Connected to MongoDB');
+}
 
 // Session states
 const STATES = {
@@ -26,85 +48,64 @@ const STATES = {
 
 // User session management
 async function getUserSession(userId: number) {
-  const { data } = await supabase
-    .from('user_sessions')
-    .select('*')
-    .eq('user_id', userId)
-    .maybeSingle();
-  return data;
+  return await userSessions.findOne({ user_id: userId });
 }
 
 async function setUserSession(userId: number, updates: any) {
-  const existing = await getUserSession(userId);
-  if (existing) {
-    await supabase
-      .from('user_sessions')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('user_id', userId);
-  } else {
-    await supabase
-      .from('user_sessions')
-      .insert({ user_id: userId, ...updates });
-  }
+  await userSessions.updateOne(
+    { user_id: userId },
+    { $set: { ...updates, updated_at: new Date() } },
+    { upsert: true }
+  );
 }
 
 async function clearUserSession(userId: number) {
-  await supabase
-    .from('user_sessions')
-    .update({
-      state: STATES.IDLE,
-      source_channel: null,
-      source_title: null,
-      dest_channel: null,
-      dest_title: null,
-      skip_number: 0,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('user_id', userId);
+  await userSessions.updateOne(
+    { user_id: userId },
+    {
+      $set: {
+        state: STATES.IDLE,
+        source_channel: null,
+        source_title: null,
+        dest_channel: null,
+        dest_title: null,
+        skip_number: 0,
+        updated_at: new Date(),
+      }
+    },
+    { upsert: true }
+  );
 }
 
 // Database operations
 async function loadBotConfig() {
-  const { data } = await supabase.from('bot_config').select('*').limit(1).maybeSingle();
-  return data;
+  return await botConfig.findOne({ _id: 'config' });
 }
 
 async function saveBotConfig(sourceChannel: string, destChannel: string) {
-  const existing = await loadBotConfig();
-  if (existing) {
-    await supabase.from('bot_config').update({ 
-      source_channel: sourceChannel, 
-      dest_channel: destChannel,
-      updated_at: new Date().toISOString()
-    }).eq('id', existing.id);
-  } else {
-    await supabase.from('bot_config').insert({ 
-      source_channel: sourceChannel, 
-      dest_channel: destChannel 
-    });
-  }
+  await botConfig.updateOne(
+    { _id: 'config' },
+    {
+      $set: {
+        source_channel: sourceChannel,
+        dest_channel: destChannel,
+        updated_at: new Date()
+      }
+    },
+    { upsert: true }
+  );
 }
 
 async function loadProgress() {
-  const { data } = await supabase.from('forwarding_progress').select('*').eq('id', 'current').maybeSingle();
-  return data;
+  return await forwardingProgress.findOne({ _id: 'current' });
 }
 
 async function saveProgress(progress: any) {
-  const { data: existing } = await supabase.from('forwarding_progress').select('id').eq('id', 'current').maybeSingle();
-  
-  if (existing) {
-    await supabase.from('forwarding_progress').update({
-      ...progress,
-      last_updated_at: new Date().toISOString()
-    }).eq('id', 'current');
-  } else {
-    await supabase.from('forwarding_progress').insert({
-      id: 'current',
-      ...progress,
-      last_updated_at: new Date().toISOString()
-    });
-  }
+  await forwardingProgress.updateOne(
+    { _id: 'current' },
+    { $set: { ...progress, last_updated_at: new Date() } },
+    { upsert: true }
+  );
 }
 
 async function isStopRequested() {
@@ -113,7 +114,10 @@ async function isStopRequested() {
 }
 
 async function requestStop() {
-  await supabase.from('forwarding_progress').update({ stop_requested: true }).eq('id', 'current');
+  await forwardingProgress.updateOne(
+    { _id: 'current' },
+    { $set: { stop_requested: true } }
+  );
 }
 
 // Telegram API helpers
@@ -228,13 +232,12 @@ async function copyMessages(fromChatId: string, toChatId: string, messageIds: nu
 }
 
 async function getForwardedMessageIds(sourceChannel: string, destChannel: string, messageIds: number[]) {
-  const { data } = await supabase
-    .from('forwarded_messages')
-    .select('source_message_id')
-    .eq('source_channel', sourceChannel)
-    .eq('dest_channel', destChannel)
-    .in('source_message_id', messageIds);
-  return data?.map(d => d.source_message_id) || [];
+  const docs = await forwardedMessages.find({
+    source_channel: sourceChannel,
+    dest_channel: destChannel,
+    source_message_id: { $in: messageIds }
+  }).toArray();
+  return docs.map(d => d.source_message_id);
 }
 
 async function saveForwardedMessageIds(sourceChannel: string, destChannel: string, messageIds: number[]) {
@@ -242,8 +245,9 @@ async function saveForwardedMessageIds(sourceChannel: string, destChannel: strin
     source_channel: sourceChannel,
     dest_channel: destChannel,
     source_message_id: id,
+    forwarded_at: new Date()
   }));
-  await supabase.from('forwarded_messages').insert(records);
+  await forwardedMessages.insertMany(records);
 }
 
 function extractChannelFromMessage(message: any): { chatId: string; title: string; lastMsgId: number } | null {
@@ -334,7 +338,7 @@ async function bulkForward(
         is_active: true,
         stop_requested: true,
         speed: Math.round(successCount / Math.max((Date.now() - originalStartedAt) / 60000, 0.001)),
-        started_at: new Date(originalStartedAt).toISOString(),
+        started_at: new Date(originalStartedAt),
       };
       await saveProgress(progressPayload);
       if (chatId) await updateWatchedProgressMessage(chatId, progressPayload);
@@ -398,7 +402,7 @@ async function bulkForward(
       is_active: currentId <= endId,
       stop_requested: false,
       speed: speed,
-      started_at: new Date(originalStartedAt).toISOString(),
+      started_at: new Date(originalStartedAt),
     };
 
     await saveProgress(progressPayload);
@@ -416,7 +420,7 @@ async function bulkForward(
     is_active: false,
     stop_requested: false,
     speed: 0,
-    started_at: new Date(originalStartedAt).toISOString(),
+    started_at: new Date(originalStartedAt),
   };
   await saveProgress(completeProgressPayload);
   if (chatId) await updateWatchedProgressMessage(chatId, completeProgressPayload);
@@ -680,7 +684,7 @@ async function handleCallbackQuery(callbackQuery: any) {
       total_count: endId - startId + 1,
       is_active: true,
       stop_requested: false,
-      started_at: new Date().toISOString(),
+      started_at: new Date(),
       rate_limit_hits: 0,
       speed: 0,
     });
@@ -787,7 +791,7 @@ async function handleWebhook(update: any) {
 
 // Express routes
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'Telegram Forwarder Bot is running' });
+  res.json({ status: 'ok', message: 'Telegram Forwarder Bot is running (MongoDB)' });
 });
 
 app.get('/health', (req, res) => {
@@ -825,8 +829,15 @@ app.get('/delete-webhook', async (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 Webhook endpoint: POST /webhook`);
-  console.log(`🔗 Set webhook: GET /set-webhook`);
-});
+async function startServer() {
+  await connectMongoDB();
+  
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📡 Webhook endpoint: POST /webhook`);
+    console.log(`🔗 Set webhook: GET /set-webhook`);
+    console.log(`🗄️ Database: MongoDB`);
+  });
+}
+
+startServer().catch(console.error);
