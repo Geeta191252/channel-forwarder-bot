@@ -205,6 +205,7 @@ let botConfig: Collection<BotConfigDoc>;
 let forwardingProgress: Collection<ProgressDoc>;
 let forwardedMessages: Collection;
 let referrals: Collection;
+let userChannels: Collection;
 
 async function connectMongoDB() {
   const client = new MongoClient(MONGODB_URI);
@@ -216,12 +217,14 @@ async function connectMongoDB() {
   forwardingProgress = db.collection<ProgressDoc>('forwarding_progress');
   forwardedMessages = db.collection('forwarded_messages');
   referrals = db.collection('referrals');
+  userChannels = db.collection('user_channels');
 
   // Create indexes
   await userSessions.createIndex({ user_id: 1 }, { unique: true });
   await forwardedMessages.createIndex({ source_channel: 1, dest_channel: 1, source_message_id: 1 });
   await referrals.createIndex({ referrer_id: 1 });
   await referrals.createIndex({ referred_id: 1 }, { unique: true });
+  await userChannels.createIndex({ user_id: 1, channel_id: 1 }, { unique: true });
 
   console.log('✅ Connected to MongoDB');
 }
@@ -864,6 +867,22 @@ async function handleWizardMessage(chatId: number, message: any) {
       return true;
     }
     
+    // Save channel to database
+    try {
+      await userChannels.updateOne(
+        { user_id: chatId, channel_id: channelInfo.chatId },
+        { $set: { 
+          user_id: chatId,
+          channel_id: channelInfo.chatId, 
+          channel_title: channelInfo.title,
+          added_at: new Date() 
+        }},
+        { upsert: true }
+      );
+    } catch (e) {
+      console.log('Channel save error:', e);
+    }
+    
     await clearUserSession(chatId);
     
     await sendMessage(chatId,
@@ -1013,13 +1032,23 @@ async function handleCallbackQuery(callbackQuery: any) {
     });
   }
   else if (data === 'channel') {
+    // Fetch user's saved channels
+    const channels = await userChannels.find({ user_id: chatId }).toArray();
+    
+    const buttons: any[][] = [];
+    
+    // Add channel buttons
+    for (const ch of channels) {
+      buttons.push([{ text: ch.channel_title || ch.channel_id, callback_data: `ch_${ch.channel_id}` }]);
+    }
+    
+    buttons.push([{ text: '➕ Add Channel ➕', callback_data: 'add_channel' }]);
+    buttons.push([{ text: '↩️ Back', callback_data: 'menu' }]);
+    
     await sendMessage(chatId, 
       `<u>My Channels</u>\n\n` +
       `you can manage your target chats in here`,
-      { inline_keyboard: [
-        [{ text: '➕ Add Channel ➕', callback_data: 'add_channel' }],
-        [{ text: '↩️ Back', callback_data: 'menu' }]
-      ]}
+      { inline_keyboard: buttons }
     );
   }
   else if (data === 'add_channel') {
@@ -1034,6 +1063,32 @@ async function handleCallbackQuery(callbackQuery: any) {
   else if (data === 'cancel_target') {
     await clearUserSession(chatId);
     await sendMessage(chatId, '❌ Process cancelled.', {
+      inline_keyboard: [[{ text: '🔙 Back', callback_data: 'channel' }]]
+    });
+  }
+  else if (data.startsWith('ch_')) {
+    const channelId = data.replace('ch_', '');
+    const channel = await userChannels.findOne({ user_id: chatId, channel_id: channelId });
+    
+    if (channel) {
+      await sendMessage(chatId,
+        `📢 <b>${channel.channel_title || 'Channel'}</b>\n\n` +
+        `🆔 ID: <code>${channel.channel_id}</code>`,
+        { inline_keyboard: [
+          [{ text: '🗑️ Delete', callback_data: `del_${channelId}` }],
+          [{ text: '🔙 Back', callback_data: 'channel' }]
+        ]}
+      );
+    } else {
+      await sendMessage(chatId, '❌ Channel not found.', {
+        inline_keyboard: [[{ text: '🔙 Back', callback_data: 'channel' }]]
+      });
+    }
+  }
+  else if (data.startsWith('del_')) {
+    const channelId = data.replace('del_', '');
+    await userChannels.deleteOne({ user_id: chatId, channel_id: channelId });
+    await sendMessage(chatId, '✅ Channel deleted!', {
       inline_keyboard: [[{ text: '🔙 Back', callback_data: 'channel' }]]
     });
   }
