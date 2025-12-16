@@ -514,6 +514,20 @@ serve(async (req) => {
       return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    if (action === 'delete-webhook') {
+      console.log('Deleting Telegram webhook');
+      const result = await sendTelegramRequest('deleteWebhook', { drop_pending_updates: true });
+      console.log('deleteWebhook result:', result);
+      return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    if (action === 'webhook-info') {
+      console.log('Fetching Telegram webhook info');
+      const result = await sendTelegramRequest('getWebhookInfo', {});
+      console.log('getWebhookInfo result:', result);
+      return new Response(JSON.stringify(result), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     return new Response(JSON.stringify({ error: 'Unknown action' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error: unknown) {
