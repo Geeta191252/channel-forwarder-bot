@@ -508,6 +508,11 @@ async function handleCommand(chatId: number, text: string, message: any) {
       return;
     }
 
+    if (!progress.source_channel || !progress.dest_channel || !progress.end_id) {
+      await sendMessage(chatId, '❌ Cannot resume: missing source/destination or end message id. Please run /forward again.');
+      return;
+    }
+
     const lastBatch = progress.current_batch || 0;
     const startId = (progress.start_id || 0) + (lastBatch * 100);
 
