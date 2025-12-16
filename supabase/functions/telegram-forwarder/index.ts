@@ -107,6 +107,7 @@ async function saveForwardedMessageIds(
 interface TelegramMessage {
   message_id: number;
   chat?: { id: number };
+  text?: string;
   document?: { file_name?: string };
   photo?: unknown;
   video?: unknown;
@@ -122,13 +123,119 @@ interface TelegramUpdate {
   channel_post?: TelegramMessage;
 }
 
+// Send message to Telegram chat
+async function sendMessage(chatId: string, text: string, parseMode = 'HTML') {
+  return sendTelegramRequest('sendMessage', {
+    chat_id: chatId,
+    text,
+    parse_mode: parseMode,
+  });
+}
+
+// Handle bot commands from Telegram
+async function handleCommand(chatId: string, text: string): Promise<string> {
+  const parts = text.trim().split(/\s+/);
+  const command = parts[0].toLowerCase().replace('@', '').split('@')[0];
+  const args = parts.slice(1);
+
+  switch (command) {
+    case '/start':
+    case '/help':
+      return `🤖 <b>Telegram File Forwarder Bot</b>
+
+<b>Commands:</b>
+/setconfig &lt;source&gt; &lt;dest&gt; - Set source and destination channels
+/forward &lt;start&gt; &lt;end&gt; - Forward messages from start to end ID
+/status - Show current configuration
+/stop - Stop current forwarding
+/progress - Show live progress
+
+<b>Example:</b>
+<code>/setconfig -1001234567890 -1009876543210</code>
+<code>/forward 1 10000</code>`;
+
+    case '/setconfig':
+      if (args.length < 2) {
+        return '❌ Usage: /setconfig &lt;source_channel_id&gt; &lt;dest_channel_id&gt;';
+      }
+      botConfig = { sourceChannel: args[0], destChannel: args[1] };
+      return `✅ Configuration saved!
+📤 Source: <code>${args[0]}</code>
+📥 Destination: <code>${args[1]}</code>`;
+
+    case '/status':
+      if (!botConfig) {
+        return '⚠️ Bot not configured. Use /setconfig first.';
+      }
+      const statusText = liveProgress.isRunning 
+        ? `🔄 Forwarding in progress...
+✅ Success: ${liveProgress.success}
+❌ Failed: ${liveProgress.failed}
+⏱️ Speed: ${Math.round(liveProgress.success / ((Date.now() - liveProgress.startTime) / 60000))} files/min`
+        : '💤 Idle';
+      return `📊 <b>Bot Status</b>
+
+📤 Source: <code>${botConfig.sourceChannel}</code>
+📥 Destination: <code>${botConfig.destChannel}</code>
+
+${statusText}`;
+
+    case '/forward':
+      if (!botConfig) {
+        return '⚠️ Bot not configured. Use /setconfig first.';
+      }
+      if (args.length < 2) {
+        return '❌ Usage: /forward &lt;start_id&gt; &lt;end_id&gt;';
+      }
+      const startId = parseInt(args[0]);
+      const endId = parseInt(args[1]);
+      if (isNaN(startId) || isNaN(endId)) {
+        return '❌ Invalid message IDs';
+      }
+      
+      // Start forwarding in background
+      sendMessage(chatId, `🚀 Starting forward: ${startId} to ${endId} (${endId - startId + 1} messages)`);
+      
+      // Run async without waiting
+      bulkForward(botConfig.sourceChannel, botConfig.destChannel, startId, endId)
+        .then(result => {
+          sendMessage(chatId, `✅ Forwarding complete!
+📊 Success: ${result.success}
+❌ Failed: ${result.failed}
+⚡ Rate limits hit: ${result.rateLimitHits}`);
+        })
+        .catch(err => {
+          sendMessage(chatId, `❌ Error: ${err.message}`);
+        });
+      
+      return ''; // Already sent initial message
+
+    case '/stop':
+      stopForwarding = true;
+      return '🛑 Stop signal sent. Forwarding will stop after current batch.';
+
+    case '/progress':
+      if (!liveProgress.isRunning) {
+        return '💤 No forwarding in progress.';
+      }
+      const elapsedSec = (Date.now() - liveProgress.startTime) / 1000;
+      const speed = elapsedSec > 0 ? Math.round(liveProgress.success / elapsedSec * 60) : 0;
+      const percent = liveProgress.total > 0 ? Math.round((liveProgress.success / liveProgress.total) * 100) : 0;
+      return `📊 <b>Live Progress</b>
+
+✅ Success: ${liveProgress.success} / ${liveProgress.total} (${percent}%)
+❌ Failed: ${liveProgress.failed}
+⚡ Rate limits: ${liveProgress.rateLimitHits}
+🚀 Speed: ${speed} files/min
+⏱️ Elapsed: ${Math.round(elapsedSec)}s`;
+
+    default:
+      return '';
+  }
+}
+
 async function handleWebhook(update: TelegramUpdate) {
   console.log('Received Telegram update:', JSON.stringify(update, null, 2));
-  
-  if (!botConfig) {
-    console.log('Bot not configured yet');
-    return { ok: true, message: 'Bot not configured' };
-  }
 
   const message = update.message || update.channel_post;
   if (!message) {
@@ -138,6 +245,22 @@ async function handleWebhook(update: TelegramUpdate) {
 
   const chatId = String(message.chat?.id);
   const messageId = message.message_id;
+  const text = message.text || '';
+
+  // Handle bot commands (from any chat)
+  if (text.startsWith('/')) {
+    const response = await handleCommand(chatId, text);
+    if (response) {
+      await sendMessage(chatId, response);
+    }
+    return { ok: true, command: true };
+  }
+
+  // Auto-forward files from source channel
+  if (!botConfig) {
+    console.log('Bot not configured yet');
+    return { ok: true, message: 'Bot not configured' };
+  }
 
   // Check if message is from source channel
   if (chatId !== botConfig.sourceChannel) {
@@ -145,13 +268,12 @@ async function handleWebhook(update: TelegramUpdate) {
     return { ok: true };
   }
 
-  // Check if message contains a document/file
+  // Check if message contains a file
   const hasFile = message.document || message.photo || message.video || 
                   message.audio || message.voice || message.video_note ||
                   message.animation || message.sticker;
 
   if (hasFile) {
-    // Check if already forwarded
     const alreadyForwarded = await getForwardedMessageIds(
       botConfig.sourceChannel, 
       botConfig.destChannel, 
@@ -160,7 +282,7 @@ async function handleWebhook(update: TelegramUpdate) {
     
     if (alreadyForwarded.has(messageId)) {
       console.log(`Message ${messageId} already forwarded, skipping`);
-      return { ok: true, skipped: true, message: 'Already forwarded' };
+      return { ok: true, skipped: true };
     }
     
     console.log(`Forwarding file from ${botConfig.sourceChannel} to ${botConfig.destChannel}`);
@@ -170,14 +292,10 @@ async function handleWebhook(update: TelegramUpdate) {
       await saveForwardedMessageIds(botConfig.sourceChannel, botConfig.destChannel, [messageId]);
     }
     
-    return { 
-      ok: result.ok, 
-      forwarded: true,
-      fileName: message.document?.file_name || 'media file'
-    };
+    return { ok: result.ok, forwarded: true };
   }
 
-  return { ok: true, message: 'No file in message' };
+  return { ok: true };
 }
 
 async function setWebhook(webhookUrl: string) {
