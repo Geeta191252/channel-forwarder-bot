@@ -713,6 +713,7 @@ async function handleCommand(chatId: number, text: string, message: any, botUser
   
   else if (command === '/stop') {
     await requestStop();
+    await sendMessage(chatId, '❌ Forward Cancelled');
   }
   
   else if (command === '/progress') {
@@ -1199,6 +1200,7 @@ async function handleCallbackQuery(callbackQuery: any) {
   }
   else if (data === 'stop' || data === 'stop_forward') {
     await requestStop();
+    await sendMessage(chatId, '❌ Forward Cancelled');
   }
   else if (data === 'help') {
     await sendMessage(chatId, 
