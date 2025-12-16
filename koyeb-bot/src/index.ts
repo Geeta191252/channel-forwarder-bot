@@ -525,7 +525,6 @@ async function bulkForward(
       };
       await saveProgress(progressPayload);
       if (chatId) await updateWatchedProgressMessage(chatId, progressPayload);
-      if (chatId) await sendMessage(chatId, `⏹️ Stopped at batch ${batchNum}. Use /resume to continue.`);
       return { success: successCount, failed: failedCount, needsResume: true };
     }
 
@@ -714,7 +713,6 @@ async function handleCommand(chatId: number, text: string, message: any, botUser
   
   else if (command === '/stop') {
     await requestStop();
-    await sendMessage(chatId, '⏹️ Stop requested. Will stop after current batch.');
   }
   
   else if (command === '/progress') {
@@ -1201,7 +1199,6 @@ async function handleCallbackQuery(callbackQuery: any) {
   }
   else if (data === 'stop' || data === 'stop_forward') {
     await requestStop();
-    await sendMessage(chatId, '⏹️ Stop requested. Will stop after current batch.');
   }
   else if (data === 'help') {
     await sendMessage(chatId, 
