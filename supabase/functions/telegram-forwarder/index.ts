@@ -218,6 +218,7 @@ async function handleCommand(chatId: string, text: string): Promise<string> {
 /setupwebhook - Auto setup webhook (run once)
 /setconfig &lt;source&gt; &lt;dest&gt; - Set source and destination channels
 /forward &lt;start&gt; &lt;end&gt; - Forward messages from start to end ID
+/resume - Continue from where it stopped
 /status - Show current configuration
 /stop - Stop current forwarding
 /progress - Show live progress
@@ -292,15 +293,16 @@ ${statusText}`;
       }
       
       // Start forwarding in background
-      sendMessage(chatId, `🚀 Starting forward: ${startId} to ${endId} (${endId - startId + 1} messages)`);
+      sendMessage(chatId, `🚀 Starting forward: ${startId} to ${endId} (${endId - startId + 1} messages)\n\n⚠️ Use /resume if it stops.`);
       
       // Run async without waiting
-      bulkForward(forwardConfig.sourceChannel, forwardConfig.destChannel, startId, endId)
+      bulkForward(forwardConfig.sourceChannel, forwardConfig.destChannel, startId, endId, false)
         .then(result => {
-          sendMessage(chatId, `✅ Forwarding complete!
-📊 Success: ${result.success}
-❌ Failed: ${result.failed}
-⚡ Rate limits hit: ${result.rateLimitHits}`);
+          if (result.needsResume) {
+            sendMessage(chatId, `⏸️ Batch complete! Use /resume to continue.\n📊 Progress: ${result.success}/${result.total}`);
+          } else {
+            sendMessage(chatId, `✅ Forwarding complete!\n📊 Success: ${result.success}\n❌ Failed: ${result.failed}`);
+          }
         })
         .catch(err => {
           sendMessage(chatId, `❌ Error: ${err.message}`);
@@ -308,13 +310,42 @@ ${statusText}`;
       
       return ''; // Already sent initial message
 
+    case '/resume':
+      const resumeConfig = await loadBotConfig();
+      if (!resumeConfig) {
+        return '⚠️ Bot not configured. Use /setconfig first.';
+      }
+      const existingProgress = await loadProgress();
+      if (!existingProgress || !existingProgress.start_id || !existingProgress.end_id) {
+        return '💤 No forwarding to resume. Use /forward first.';
+      }
+      if (existingProgress.current_batch >= existingProgress.total_batches) {
+        return '✅ Forwarding already complete!';
+      }
+      
+      sendMessage(chatId, `🔄 Resuming from batch ${existingProgress.current_batch || 0}/${existingProgress.total_batches}...`);
+      
+      bulkForward(resumeConfig.sourceChannel, resumeConfig.destChannel, existingProgress.start_id, existingProgress.end_id, true)
+        .then(result => {
+          if (result.needsResume) {
+            sendMessage(chatId, `⏸️ Batch complete! Use /resume to continue.\n📊 Progress: ${result.success}/${result.total}`);
+          } else {
+            sendMessage(chatId, `✅ Forwarding complete!\n📊 Success: ${result.success}\n❌ Failed: ${result.failed}`);
+          }
+        })
+        .catch(err => {
+          sendMessage(chatId, `❌ Error: ${err.message}`);
+        });
+      
+      return '';
+
     case '/stop':
       await requestStop();
       return '🛑 Stop signal sent. Forwarding will stop after current batch.';
 
     case '/progress':
       const progressData = await loadProgress();
-      if (!progressData?.is_active) {
+      if (!progressData || (!progressData.is_active && progressData.current_batch === 0)) {
         return '💤 No forwarding in progress.';
       }
       const elapsedMs = progressData.started_at 
@@ -325,7 +356,9 @@ ${statusText}`;
       const percent = progressData.total_count > 0 
         ? Math.round(((progressData.success_count || 0) / progressData.total_count) * 100) 
         : 0;
-      return `📊 <b>Live Progress</b>
+      const progressStatusEmoji = progressData.is_active ? '🔄' : '⏸️';
+      const progressStatusText = progressData.is_active ? 'Running' : 'Paused (use /resume)';
+      return `📊 <b>Progress</b> ${progressStatusEmoji} ${progressStatusText}
 
 ✅ Success: ${progressData.success_count || 0} / ${progressData.total_count || 0} (${percent}%)
 ❌ Failed: ${progressData.failed_count || 0}
@@ -455,38 +488,53 @@ async function copyMessagesWithRetry(
   return { ok: false, count: 0 };
 }
 
-// Bulk forward messages - maximum speed
+// Bulk forward messages - limited batches per call to avoid timeout
+const MAX_GROUPS_PER_CALL = 3; // Process 3 groups (30 batches = 3000 messages) per call
+
 async function bulkForward(
   sourceChannel: string, 
   destChannel: string, 
   startId: number, 
-  endId: number
-): Promise<{ success: number; failed: number; skipped: number; total: number; stopped: boolean; rateLimitHits: number }> {
+  endId: number,
+  isResume: boolean = false
+): Promise<{ success: number; failed: number; skipped: number; total: number; stopped: boolean; rateLimitHits: number; needsResume: boolean }> {
   const total = endId - startId + 1;
+  
+  // Load existing progress if resuming
+  let existingProgress = isResume ? await loadProgress() : null;
+  let startBatchIndex = 0;
   
   // Reset local progress
   localProgress = { rateLimitHits: 0, success: 0, failed: 0 };
   
-  // Init progress in database
-  await saveProgress({
-    is_active: true,
-    source_channel: sourceChannel,
-    dest_channel: destChannel,
-    start_id: startId,
-    end_id: endId,
-    current_batch: 0,
-    total_batches: 0,
-    success_count: 0,
-    failed_count: 0,
-    skipped_count: 0,
-    total_count: total,
-    rate_limit_hits: 0,
-    speed: 0,
-    started_at: new Date().toISOString(),
-    stop_requested: false,
-  });
+  if (isResume && existingProgress) {
+    startBatchIndex = existingProgress.current_batch || 0;
+    localProgress.success = existingProgress.success_count || 0;
+    localProgress.failed = existingProgress.failed_count || 0;
+    localProgress.rateLimitHits = existingProgress.rate_limit_hits || 0;
+    console.log(`Resuming from batch ${startBatchIndex}`);
+  } else {
+    // Init progress in database
+    await saveProgress({
+      is_active: true,
+      source_channel: sourceChannel,
+      dest_channel: destChannel,
+      start_id: startId,
+      end_id: endId,
+      current_batch: 0,
+      total_batches: 0,
+      success_count: 0,
+      failed_count: 0,
+      skipped_count: 0,
+      total_count: total,
+      rate_limit_hits: 0,
+      speed: 0,
+      started_at: new Date().toISOString(),
+      stop_requested: false,
+    });
+  }
   
-  console.log(`Forwarding ${total} messages at max speed`);
+  console.log(`Forwarding ${total} messages`);
   
   // Telegram limit: 100 messages per copyMessages call
   const batchSize = 100;
@@ -503,11 +551,15 @@ async function bulkForward(
   }
   
   const totalBatches = batches.length;
-  await saveProgress({ is_active: true, total_batches: totalBatches });
-  console.log(`Total batches: ${totalBatches}, processing ${parallelBatches} in parallel`);
+  if (!isResume) {
+    await saveProgress({ is_active: true, total_batches: totalBatches });
+  }
+  console.log(`Total batches: ${totalBatches}, starting from ${startBatchIndex}`);
   
-  // Process all batches in parallel groups
-  for (let i = 0; i < batches.length; i += parallelBatches) {
+  let groupsProcessed = 0;
+  
+  // Process batches in parallel groups, starting from saved position
+  for (let i = startBatchIndex; i < batches.length; i += parallelBatches) {
     // Check stop flag from database
     if (await isStopRequested()) {
       console.log('Stopped by user');
@@ -518,7 +570,23 @@ async function bulkForward(
         skipped: 0, 
         total, 
         stopped: true,
-        rateLimitHits: localProgress.rateLimitHits
+        rateLimitHits: localProgress.rateLimitHits,
+        needsResume: false
+      };
+    }
+    
+    // Limit groups per call to avoid timeout
+    if (groupsProcessed >= MAX_GROUPS_PER_CALL) {
+      console.log(`Processed ${groupsProcessed} groups, pausing for resume`);
+      await saveProgress({ is_active: false });
+      return { 
+        success: localProgress.success, 
+        failed: localProgress.failed, 
+        skipped: 0, 
+        total, 
+        stopped: false,
+        rateLimitHits: localProgress.rateLimitHits,
+        needsResume: true
       };
     }
     
@@ -542,6 +610,8 @@ async function bulkForward(
       localProgress.failed += r.failed;
     }
     
+    groupsProcessed++;
+    
     // Update progress in database every group
     await saveProgress({
       is_active: true,
@@ -561,7 +631,8 @@ async function bulkForward(
     skipped: 0, 
     total, 
     stopped: false,
-    rateLimitHits: localProgress.rateLimitHits
+    rateLimitHits: localProgress.rateLimitHits,
+    needsResume: false
   };
 }
 
