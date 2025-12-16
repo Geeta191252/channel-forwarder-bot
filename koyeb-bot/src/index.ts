@@ -69,20 +69,20 @@ async function showForceSubscribe(chatId: number) {
   
   for (let i = 0; i < FORCE_SUB_CHANNELS.length; i++) {
     const channelId = FORCE_SUB_CHANNELS[i];
-    const channelName = FORCE_SUB_CHANNEL_NAMES[i] || `Update Channel ${i + 1}`;
+    const channelName = FORCE_SUB_CHANNEL_NAMES[i] || `Channel/Group ${i + 1}`;
     const channelLink = channelId.startsWith('@') 
       ? `https://t.me/${channelId.substring(1)}` 
       : `https://t.me/c/${channelId.replace('-100', '')}`;
     
-    buttons.push([{ text: `📢 Join ${channelName} ✅`, url: channelLink }]);
+    buttons.push([{ text: `🔗 Join ${channelName} ✅`, url: channelLink }]);
   }
   
   buttons.push([{ text: '✅ Continue ➡️', callback_data: 'check_subscription' }]);
   
   await sendMessage(chatId, 
     `🔐 <b>Access Required</b>\n\n` +
-    `To use this bot, you must join our update channel(s).\n\n` +
-    `👇 <b>Join the channel(s) below and click Continue:</b>`,
+    `To use this bot, you must join our channel(s)/group(s).\n\n` +
+    `👇 <b>Join below and click Continue:</b>`,
     { inline_keyboard: buttons }
   );
 }
