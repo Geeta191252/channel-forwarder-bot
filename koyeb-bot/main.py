@@ -15,7 +15,7 @@ load_dotenv()
 flask_app = Flask(__name__)
 
 # MongoDB setup
-MONGO_URI = os.getenv("MONGO_URI", "")
+MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or ""
 mongo_client = MongoClient(MONGO_URI) if MONGO_URI else None
 db = mongo_client["telegram_forwarder"] if mongo_client else None
 
@@ -29,7 +29,9 @@ config_col = db["bot_config"] if db else None
 API_ID = os.getenv("API_ID", "")
 API_HASH = os.getenv("API_HASH", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")  # For user account
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")  # For bot commands
+# Support common env var names used in deploy dashboards
+BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""  # For bot commands
+
 
 # Speed settings - MTProto allows much faster speeds
 BATCH_SIZE = 10  # Messages per batch
