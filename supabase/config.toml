@@ -1,4 +1,1 @@
 project_id = "wqspxhsjujakaldaxhvm"
-
-[functions.telegram-forwarder]
-verify_jwt = false
