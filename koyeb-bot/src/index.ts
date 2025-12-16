@@ -790,17 +790,17 @@ async function handleWizardMessage(chatId: number, message: any) {
       return true;
     }
     
-    await setUserSession(chatId, {
-      skip_number: skipNum,
-    });
-    
     // Check if user has saved channels
     const savedChannels = await userChannels.find({ user_id: chatId }).toArray();
     
+    // Save skip_number and update state in single call
+    await setUserSession(chatId, {
+      skip_number: skipNum,
+      state: STATES.WAITING_DEST,
+    });
+    
     if (savedChannels.length > 0) {
       // Show saved channels to select as destination
-      await setUserSession(chatId, { state: STATES.WAITING_DEST });
-      
       const buttons: any[][] = [];
       for (const ch of savedChannels) {
         buttons.push([{ text: `📢 ${ch.channel_title || ch.channel_id}`, callback_data: `select_dest_${ch.channel_id}` }]);
@@ -814,7 +814,6 @@ async function handleWizardMessage(chatId: number, message: any) {
       );
     } else {
       // No saved channels, ask to forward message
-      await setUserSession(chatId, { state: STATES.WAITING_DEST });
       
       await sendMessage(chatId,
         `<b>( SET DESTINATION CHAT )</b>\n\n` +
@@ -1155,8 +1154,9 @@ async function handleCallbackQuery(callbackQuery: any) {
 
     await saveBotConfig(session.source_channel, session.dest_channel);
 
-    const endId = session.last_message_id;
-    const startId = 1 + session.skip_number;
+    const endId = session.last_message_id || 0;
+    const skipNumber = session.skip_number || 0;
+    const startId = 1 + skipNumber;
 
     const progressData = {
       source_channel: session.source_channel,
