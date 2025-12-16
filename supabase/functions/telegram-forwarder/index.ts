@@ -459,11 +459,10 @@ async function handleWizardMessage(chatId: number, message: any) {
     });
     
     await sendMessage(chatId,
-      `<b>( SET MESSAGE SKIPPING NUMBER )</b>\n\n` +
-      `Skip the message as much as you enter the number and the rest of the message will be forwarded\n` +
-      `Default Skip Number = 0\n` +
-      `eg: You enter 0 = 0 message skiped\n` +
-      ` You enter 5 = 5 message skiped\n` +
+      `<b>( SET MESSAGE SKIP ID )</b>\n\n` +
+      `Aap jis message ID tak skip karna chahte ho, wahi ID enter karein.\n` +
+      `Example: 291700 enter => 291701 se forwarding start hogi.\n` +
+      `Default = 0 (start from 1)\n` +
       `/cancel - cancel this process`,
       { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel' }]] }
     );
@@ -524,7 +523,7 @@ async function handleWizardMessage(chatId: number, message: any) {
       `   ID: <code>${updatedSession?.source_channel}</code>\n\n` +
       `📥 <b>Destination:</b> ${updatedSession?.dest_title || 'Unknown'}\n` +
       `   ID: <code>${updatedSession?.dest_channel}</code>\n\n` +
-      `⏭️ <b>Skip:</b> ${updatedSession?.skip_number} messages\n` +
+      `⏭️ <b>Skip until ID:</b> ${updatedSession?.skip_number || 0}\n` +
       `📨 <b>Last Msg ID:</b> ${updatedSession?.last_message_id}\n\n` +
       `<b>Start forwarding?</b>`,
       keyboard
@@ -788,9 +787,9 @@ async function handleCallbackQuery(callbackQuery: any) {
     await saveBotConfig(session.source_channel, session.dest_channel);
     
     // Calculate start message ID
-    // Skip number IS the starting message ID (user enters 291700 = start from msg 291700)
+    // User enters the LAST skipped message ID (e.g. 291700 => start forwarding from 291701)
     const endId = session.last_message_id;
-    const startId = session.skip_number > 0 ? session.skip_number : 1;
+    const startId = session.skip_number > 0 ? (session.skip_number + 1) : 1;
     
     // Start forwarding
     await saveProgress({
@@ -811,13 +810,12 @@ async function handleCallbackQuery(callbackQuery: any) {
       speed: 0,
     });
     
-    await clearUserSession(chatId);
     await sendMessage(chatId, 
       `🚀 <b>Forwarding Started!</b>\n\n` +
       `📤 From: ${session.source_title}\n` +
       `📥 To: ${session.dest_title}\n` +
       `📨 Messages: ${startId} to ${endId}\n` +
-      `⏭️ Skipping: ${session.skip_number} messages\n\n` +
+      `⏭️ Skipped until (ID): ${session.skip_number || 0}\n\n` +
       `Use /progress to check status\nUse /stop to stop`,
       { inline_keyboard: [
         [{ text: '📊 Progress', callback_data: 'progress' }, { text: '⏹️ Stop', callback_data: 'stop_forward' }]
