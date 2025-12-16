@@ -419,14 +419,27 @@ async function handleWizardMessage(chatId: number, message: any) {
 }
 
 // Bulk forward with batching and rate limit handling
-async function bulkForward(sourceChannel: string, destChannel: string, startId: number, endId: number, isResume: boolean, chatId?: number) {
+async function bulkForward(
+  sourceChannel: string,
+  destChannel: string,
+  startId: number,
+  endId: number,
+  isResume: boolean,
+  chatId?: number,
+  runMaxMs: number = 25_000,
+) {
   const BATCH_SIZE = 100;
+  const runStartedAt = Date.now();
+
   let currentId = startId;
-  let successCount = isResume ? (await loadProgress())?.success_count || 0 : 0;
-  let failedCount = isResume ? (await loadProgress())?.failed_count || 0 : 0;
-  let skippedCount = isResume ? (await loadProgress())?.skipped_count || 0 : 0;
-  let rateLimitHits = isResume ? (await loadProgress())?.rate_limit_hits || 0 : 0;
-  let batchNum = isResume ? (await loadProgress())?.current_batch || 0 : 0;
+  const existingProgress = isResume ? await loadProgress() : null;
+
+  let successCount = isResume ? existingProgress?.success_count || 0 : 0;
+  let failedCount = isResume ? existingProgress?.failed_count || 0 : 0;
+  let skippedCount = isResume ? existingProgress?.skipped_count || 0 : 0;
+  let rateLimitHits = isResume ? existingProgress?.rate_limit_hits || 0 : 0;
+  let batchNum = isResume ? existingProgress?.current_batch || 0 : 0;
+
   const totalBatches = Math.ceil((endId - startId + 1) / BATCH_SIZE);
   const startTime = Date.now();
 
@@ -436,9 +449,11 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
       console.log('Stop requested, saving progress...');
       await saveProgress({
         current_batch: batchNum,
+        total_batches: totalBatches,
         success_count: successCount,
         failed_count: failedCount,
         skipped_count: skippedCount,
+        total_count: endId - startId + 1,
         rate_limit_hits: rateLimitHits,
         is_active: true,
         stop_requested: true,
@@ -450,19 +465,19 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
 
     const batchEnd = Math.min(currentId + BATCH_SIZE - 1, endId);
     const messageIds = Array.from({ length: batchEnd - currentId + 1 }, (_, i) => currentId + i);
-    
+
     // Check for duplicates
     const alreadyForwarded = await getForwardedMessageIds(sourceChannel, destChannel, messageIds);
-    const toForward = messageIds.filter(id => !alreadyForwarded.includes(id));
+    const toForward = messageIds.filter((id) => !alreadyForwarded.includes(id));
     skippedCount += alreadyForwarded.length;
 
     if (toForward.length > 0) {
       let retries = 0;
       let success = false;
-      
+
       while (retries < 5 && !success) {
         const result = await copyMessages(sourceChannel, destChannel, toForward);
-        
+
         if (result.ok) {
           successCount += toForward.length;
           await saveForwardedMessageIds(sourceChannel, destChannel, toForward);
@@ -471,7 +486,7 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
           rateLimitHits++;
           const waitTime = result.parameters?.retry_after || 60;
           console.log(`Rate limited, waiting ${waitTime}s...`);
-          await new Promise(r => setTimeout(r, waitTime * 1000));
+          await new Promise((r) => setTimeout(r, waitTime * 1000));
           retries++;
         } else if (result.description?.includes('no messages to forward')) {
           skippedCount += toForward.length;
@@ -486,12 +501,16 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
 
     batchNum++;
     currentId = batchEnd + 1;
-    
+
     // Update progress
     const elapsed = (Date.now() - startTime) / 60000;
-    const speed = Math.round(successCount / elapsed);
-    
+    const speed = Math.round(successCount / Math.max(elapsed, 0.001));
+
     await saveProgress({
+      source_channel: sourceChannel,
+      dest_channel: destChannel,
+      start_id: startId,
+      end_id: endId,
       current_batch: batchNum,
       total_batches: totalBatches,
       success_count: successCount,
@@ -500,8 +519,21 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
       total_count: endId - startId + 1,
       rate_limit_hits: rateLimitHits,
       is_active: currentId <= endId,
+      stop_requested: false,
       speed: speed,
     });
+
+    // Time-slice: if we're nearing runtime limits, schedule next chunk automatically.
+    if (currentId <= endId && Date.now() - runStartedAt > runMaxMs) {
+      console.log('Time slice reached, scheduling next chunk...', { currentId, endId, batchNum });
+
+      const task = bulkForward(sourceChannel, destChannel, currentId, endId, true, chatId, runMaxMs);
+      // @ts-ignore - EdgeRuntime is available in Supabase Edge Functions
+      if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) EdgeRuntime.waitUntil(task);
+      else await task;
+
+      return { success: successCount, failed: failedCount, needsResume: false };
+    }
   }
 
   // Complete
@@ -511,7 +543,10 @@ async function bulkForward(sourceChannel: string, destChannel: string, startId: 
     success_count: successCount,
     failed_count: failedCount,
     skipped_count: skippedCount,
+    total_count: endId - startId + 1,
+    rate_limit_hits: rateLimitHits,
     is_active: false,
+    stop_requested: false,
     speed: 0,
   });
 
