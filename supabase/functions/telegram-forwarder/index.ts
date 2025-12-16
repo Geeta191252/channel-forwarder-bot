@@ -13,11 +13,10 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Store configuration in memory
-let botConfig: { sourceChannel: string; destChannel: string } | null = null;
+// Stop flag (still in memory - only valid during single execution)
 let stopForwarding = false;
 
-// Live progress tracking
+// Live progress tracking (in memory for current execution)
 let liveProgress = {
   isRunning: false,
   success: 0,
@@ -29,6 +28,38 @@ let liveProgress = {
   currentBatch: 0,
   totalBatches: 0,
 };
+
+// Load config from database
+async function loadBotConfig(): Promise<{ sourceChannel: string; destChannel: string } | null> {
+  const { data, error } = await supabase
+    .from('bot_config')
+    .select('source_channel, dest_channel')
+    .maybeSingle();
+  
+  if (error || !data) {
+    console.log('No bot config found in database');
+    return null;
+  }
+  
+  return { sourceChannel: data.source_channel, destChannel: data.dest_channel };
+}
+
+// Save config to database
+async function saveBotConfig(sourceChannel: string, destChannel: string): Promise<boolean> {
+  const { error } = await supabase
+    .from('bot_config')
+    .upsert({ 
+      source_channel: sourceChannel, 
+      dest_channel: destChannel,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'id' });
+  
+  if (error) {
+    console.error('Error saving bot config:', error);
+    return false;
+  }
+  return true;
+}
 
 async function sendTelegramRequest(method: string, params: Record<string, unknown>) {
   console.log(`Calling Telegram API: ${method}`, params);
@@ -174,13 +205,17 @@ Now use /setconfig to configure channels.`;
       if (args.length < 2) {
         return '❌ Usage: /setconfig &lt;source_channel_id&gt; &lt;dest_channel_id&gt;';
       }
-      botConfig = { sourceChannel: args[0], destChannel: args[1] };
+      const configSaved = await saveBotConfig(args[0], args[1]);
+      if (!configSaved) {
+        return '❌ Failed to save configuration. Please try again.';
+      }
       return `✅ Configuration saved!
 📤 Source: <code>${args[0]}</code>
 📥 Destination: <code>${args[1]}</code>`;
 
     case '/status':
-      if (!botConfig) {
+      const statusConfig = await loadBotConfig();
+      if (!statusConfig) {
         return '⚠️ Bot not configured. Use /setconfig first.';
       }
       const statusText = liveProgress.isRunning 
@@ -191,13 +226,14 @@ Now use /setconfig to configure channels.`;
         : '💤 Idle';
       return `📊 <b>Bot Status</b>
 
-📤 Source: <code>${botConfig.sourceChannel}</code>
-📥 Destination: <code>${botConfig.destChannel}</code>
+📤 Source: <code>${statusConfig.sourceChannel}</code>
+📥 Destination: <code>${statusConfig.destChannel}</code>
 
 ${statusText}`;
 
     case '/forward':
-      if (!botConfig) {
+      const forwardConfig = await loadBotConfig();
+      if (!forwardConfig) {
         return '⚠️ Bot not configured. Use /setconfig first.';
       }
       if (args.length < 2) {
@@ -213,7 +249,7 @@ ${statusText}`;
       sendMessage(chatId, `🚀 Starting forward: ${startId} to ${endId} (${endId - startId + 1} messages)`);
       
       // Run async without waiting
-      bulkForward(botConfig.sourceChannel, botConfig.destChannel, startId, endId)
+      bulkForward(forwardConfig.sourceChannel, forwardConfig.destChannel, startId, endId)
         .then(result => {
           sendMessage(chatId, `✅ Forwarding complete!
 📊 Success: ${result.success}
@@ -273,14 +309,15 @@ async function handleWebhook(update: TelegramUpdate) {
   }
 
   // Auto-forward files from source channel
-  if (!botConfig) {
+  const webhookConfig = await loadBotConfig();
+  if (!webhookConfig) {
     console.log('Bot not configured yet');
     return { ok: true, message: 'Bot not configured' };
   }
 
   // Check if message is from source channel
-  if (chatId !== botConfig.sourceChannel) {
-    console.log(`Message from ${chatId} ignored, not source channel ${botConfig.sourceChannel}`);
+  if (chatId !== webhookConfig.sourceChannel) {
+    console.log(`Message from ${chatId} ignored, not source channel ${webhookConfig.sourceChannel}`);
     return { ok: true };
   }
 
@@ -291,8 +328,8 @@ async function handleWebhook(update: TelegramUpdate) {
 
   if (hasFile) {
     const alreadyForwarded = await getForwardedMessageIds(
-      botConfig.sourceChannel, 
-      botConfig.destChannel, 
+      webhookConfig.sourceChannel, 
+      webhookConfig.destChannel, 
       [messageId]
     );
     
@@ -301,11 +338,11 @@ async function handleWebhook(update: TelegramUpdate) {
       return { ok: true, skipped: true };
     }
     
-    console.log(`Forwarding file from ${botConfig.sourceChannel} to ${botConfig.destChannel}`);
-    const result = await forwardMessage(botConfig.sourceChannel, botConfig.destChannel, messageId);
+    console.log(`Forwarding file from ${webhookConfig.sourceChannel} to ${webhookConfig.destChannel}`);
+    const result = await forwardMessage(webhookConfig.sourceChannel, webhookConfig.destChannel, messageId);
     
     if (result.ok) {
-      await saveForwardedMessageIds(botConfig.sourceChannel, botConfig.destChannel, [messageId]);
+      await saveForwardedMessageIds(webhookConfig.sourceChannel, webhookConfig.destChannel, [messageId]);
     }
     
     return { ok: result.ok, forwarded: true };
@@ -481,14 +518,14 @@ serve(async (req) => {
           );
         }
         
-        botConfig = { sourceChannel, destChannel };
-        console.log('Bot configured:', botConfig);
+        const saved = await saveBotConfig(sourceChannel, destChannel);
+        console.log('Bot configured:', { sourceChannel, destChannel });
         
         return new Response(
           JSON.stringify({ 
-            success: true, 
-            message: 'Bot configured successfully',
-            config: botConfig 
+            success: saved, 
+            message: saved ? 'Bot configured successfully' : 'Failed to save config',
+            config: { sourceChannel, destChannel } 
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
@@ -539,10 +576,11 @@ serve(async (req) => {
         );
 
       case 'status':
+        const currentConfig = await loadBotConfig();
         return new Response(
           JSON.stringify({ 
-            configured: !!botConfig,
-            config: botConfig 
+            configured: !!currentConfig,
+            config: currentConfig 
           }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
