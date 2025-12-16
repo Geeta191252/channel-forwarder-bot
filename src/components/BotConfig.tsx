@@ -41,12 +41,20 @@ export function BotConfig({ onConfigSaved }: BotConfigProps) {
 
       if (error) throw error;
 
+      // Auto-set webhook
+      const webhookUrl = `https://wqspxhsjujakaldaxhvm.supabase.co/functions/v1/telegram-forwarder`;
+      const webhookResult = await supabase.functions.invoke("telegram-forwarder", {
+        body: { action: "set-webhook", webhookUrl },
+      });
+
       setIsConfigured(true);
       onConfigSaved({ sourceChannel, destChannel });
       
       toast({
         title: "Configuration Saved",
-        description: "Bot is now configured and ready to forward files!",
+        description: webhookResult.data?.ok 
+          ? "Bot configured and webhook set successfully!" 
+          : "Config saved. Webhook may need manual setup.",
       });
     } catch (error) {
       console.error("Error saving config:", error);
