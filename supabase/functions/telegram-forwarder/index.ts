@@ -544,7 +544,9 @@ async function bulkForward(
   chatId?: number,
   runMaxMs: number = 25_000,
 ) {
-  const BATCH_SIZE = 100;
+  // Smaller batches reduce Telegram 429 rate-limits and improve real-world throughput
+  // (big batches often trigger long retry_after waits which kills speed)
+  const BATCH_SIZE = 20;
   const runStartedAt = Date.now();
 
   let currentId = startId;
