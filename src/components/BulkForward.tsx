@@ -32,10 +32,30 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
   const [progress, setProgress] = useState<ProgressData | null>(null);
   const { toast } = useToast();
 
-  // Poll for progress
+  // Fetch progress once on mount (supports auto-refresh even after reload)
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const { data } = await supabase.functions.invoke("telegram-forwarder", {
+        body: { action: "progress" },
+      });
+      if (cancelled) return;
+      if (data) {
+        setProgress(data);
+        if (data.is_active) setIsLoading(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Poll for progress while running
   useEffect(() => {
     if (!isLoading) return;
-    
+
     const interval = setInterval(async () => {
       const { data } = await supabase.functions.invoke("telegram-forwarder", {
         body: { action: "progress" },
@@ -54,7 +74,7 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
   const handleStart = async () => {
     const start = parseInt(startId);
     const end = parseInt(endId);
-    
+
     if (isNaN(start) || isNaN(end) || start > end) {
       toast({
         title: "Invalid IDs",
@@ -68,7 +88,7 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
     setProgress(null);
 
     try {
-      const { data, error } = await supabase.functions.invoke("telegram-forwarder", {
+      const { error } = await supabase.functions.invoke("telegram-forwarder", {
         body: {
           action: "bulk-forward",
           startMessageId: start,
@@ -79,18 +99,17 @@ export function BulkForward({ sourceChannel, destChannel }: BulkForwardProps) {
       if (error) throw error;
 
       toast({
-        title: "Forwarding Complete",
-        description: `Success: ${data.success}, Failed: ${data.failed}`,
+        title: "Forwarding Started",
+        description: "Progress will auto-refresh until completion.",
       });
     } catch (error) {
       console.error("Error:", error);
+      setIsLoading(false);
       toast({
         title: "Error",
         description: "Forwarding failed. Check console for details.",
         variant: "destructive",
       });
-    } finally {
-      setIsLoading(false);
     }
   };
 
