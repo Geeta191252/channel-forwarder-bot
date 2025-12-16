@@ -548,9 +548,9 @@ async function bulkForward(
   isResume: boolean,
   chatId?: number,
 ) {
-  // Very Safe speed: 20 batch + 4s delay (~300 files/min) - for 24/7 continuous use
-  const BATCH_SIZE = 20;
-  const SAFE_DELAY_MS = 4000; // 4 second delay between batches for maximum safety
+  // Telegram Safe: 25 messages/min limit - we do 20/min to be safe
+  const BATCH_SIZE = 1; // Send 1 message at a time
+  const SAFE_DELAY_MS = 3000; // 3 seconds between each message = 20 msgs/min (under 25 limit)
 
   let currentId = startId;
   const existingProgress = isResume ? await loadProgress() : null;
