@@ -49,16 +49,31 @@ export function BotConfig({ onConfigSaved }: BotConfigProps) {
         body: { action: "set-webhook", webhookUrl },
       });
 
+      const webhookInfo = await supabase.functions.invoke("telegram-forwarder", {
+        body: { action: "webhook-info" },
+      });
+
       setIsConfigured(true);
       onConfigSaved({ sourceChannel, destChannel });
 
+      const ok = Boolean(webhookResult.data?.ok);
+      const info = webhookInfo.data?.result;
+
       toast({
-        title: "Configuration Saved",
-        description: webhookResult.data?.ok
-          ? "Bot configured + webhook set. Buttons will work now."
-          : `Config saved but webhook failed: ${webhookResult.data?.description || "Unknown error"}`,
-        variant: webhookResult.data?.ok ? "default" : "destructive",
+        title: ok ? "Configuration Saved" : "Webhook Error",
+        description: ok
+          ? `Webhook set. Current URL: ${info?.url || webhookUrl}`
+          : `Webhook failed: ${webhookResult.data?.description || "Unknown error"}`,
+        variant: ok ? "default" : "destructive",
       });
+
+      if (info?.last_error_message) {
+        toast({
+          title: "Telegram webhook warning",
+          description: info.last_error_message,
+          variant: "destructive",
+        });
+      }
     } catch (error) {
       console.error("Error saving config:", error);
       toast({
