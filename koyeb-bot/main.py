@@ -17,13 +17,13 @@ flask_app = Flask(__name__)
 # MongoDB setup
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or ""
 mongo_client = MongoClient(MONGO_URI) if MONGO_URI else None
-db = mongo_client["telegram_forwarder"] if mongo_client else None
+db = mongo_client["telegram_forwarder"] if mongo_client is not None else None
 
 # Collections
-sessions_col = db["user_sessions"] if db else None
-progress_col = db["forwarding_progress"] if db else None
-forwarded_col = db["forwarded_messages"] if db else None
-config_col = db["bot_config"] if db else None
+sessions_col = db["user_sessions"] if db is not None else None
+progress_col = db["forwarding_progress"] if db is not None else None
+forwarded_col = db["forwarded_messages"] if db is not None else None
+config_col = db["bot_config"] if db is not None else None
 
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
@@ -61,14 +61,14 @@ bot_client = None   # Bot for commands/UI
 
 def get_config():
     """Get bot configuration from database"""
-    if config_col:
+    if config_col is not None:
         return config_col.find_one({}) or {}
     return {}
 
 
 def save_config(source_channel, dest_channel):
     """Save bot configuration to database"""
-    if config_col:
+    if config_col is not None:
         config_col.update_one(
             {},
             {"$set": {
@@ -82,7 +82,7 @@ def save_config(source_channel, dest_channel):
 
 def save_progress():
     """Save current progress to database"""
-    if progress_col:
+    if progress_col is not None:
         progress_col.update_one(
             {},
             {"$set": {
@@ -96,7 +96,7 @@ def save_progress():
 def load_progress():
     """Load progress from database"""
     global current_progress
-    if progress_col:
+    if progress_col is not None:
         saved = progress_col.find_one({})
         if saved:
             current_progress.update({
@@ -115,7 +115,7 @@ def load_progress():
 
 def is_message_forwarded(source_channel, message_id):
     """Check if message was already forwarded"""
-    if forwarded_col:
+    if forwarded_col is not None:
         return forwarded_col.find_one({
             "source_channel": source_channel,
             "source_message_id": message_id
@@ -125,7 +125,7 @@ def is_message_forwarded(source_channel, message_id):
 
 def mark_message_forwarded(source_channel, dest_channel, message_id):
     """Mark message as forwarded"""
-    if forwarded_col:
+    if forwarded_col is not None:
         forwarded_col.insert_one({
             "source_channel": source_channel,
             "dest_channel": dest_channel,
