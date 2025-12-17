@@ -3655,28 +3655,38 @@ def register_bot_handlers():
 
                             if not data.get("ok"):
                                 error_desc = data.get("description", "Unknown error")
-                                if "not found" in error_desc.lower():
+                                error_code = data.get("error_code", resp.status)
+
+                                # 404 Not Found = bot not admin OR no access to chat
+                                if error_code == 404 or "not found" in error_desc.lower():
                                     await status_msg.edit(
-                                        "❌ **Error: Not Found**\n\n"
-                                        "Agar BOT_TOKEN sahi hai, to ye **Telegram API method Not Found** bhi ho sakta hai (rare), ya response parse issue.\n\n"
-                                        f"Debug: HTTP {resp.status} | {error_desc}"
+                                        "❌ **Error: Chat Not Found / No Access**\n\n"
+                                        "Iska matlab:\n"
+                                        "1️⃣ Bot us channel/group me ADD nahi hai\n"
+                                        "2️⃣ Bot ADMIN nahi hai\n"
+                                        "3️⃣ Bot ke paas 'Invite Users via Link' permission nahi\n\n"
+                                        "**Fix:**\n"
+                                        f"• {channel} me bot ko ADD karo\n"
+                                        "• Bot ko ADMIN banao\n"
+                                        "• 'Invite Users via Link' ON karo\n"
+                                        "• Phir /approveall dobara try karo"
                                     )
                                     return
-                                if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower():
+                                if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower() or "forbidden" in error_desc.lower():
                                     await status_msg.edit(
                                         f"❌ **Bot needs admin permissions!**\n\n"
-                                        f"Make the bot admin in {channel} and allow:\n"
-                                        f"• ✅ Invite Users via Link / Add Users\n"
-                                        f"• ✅ Manage Chat (recommended)"
+                                        f"{channel} me bot ko ADMIN banao:\n"
+                                        f"• ✅ Invite Users via Link\n"
+                                        f"• ✅ Add Users (Groups)"
                                     )
                                     return
-                                if "chat not found" in error_desc.lower():
+                                if "chat not found" in error_desc.lower() or "bad request" in error_desc.lower():
                                     await status_msg.edit(
                                         f"❌ **Chat not found / bot not added**\n\n"
-                                        f"Add the bot as admin in {channel} first, then try again."
+                                        f"Bot ko {channel} me ADD karo as admin, phir try karo."
                                     )
                                     return
-                                raise Exception(error_desc)
+                                raise Exception(f"{error_desc} (code: {error_code})")
 
                             requests = data.get("result") or []
                             if not requests:
