@@ -660,8 +660,8 @@ async def forward_messages(source_channel, dest_channel, start_id, end_id, is_re
         print("✅ Forwarding completed!")
 
 
-async def wizard_forward_messages(user_id, source_channel, dest_channel, skip_number, last_message_id, bot_client):
-    """Forward messages using wizard flow with live status updates"""
+async def wizard_forward_messages(user_id, source_channel, dest_channel, skip_number, last_message_id, filters, bot_client):
+    """Forward messages using wizard flow with live status updates and filters"""
     global user_forward_progress
     
     if user_id not in user_forward_progress:
@@ -701,6 +701,43 @@ async def wizard_forward_messages(user_id, source_channel, dest_channel, skip_nu
                     progress["duplicate_msg"] = progress.get("duplicate_msg", 0) + 1
                     current_id += 1
                     continue
+                
+                # Get message to check type for filtering
+                try:
+                    msg = await client.get_messages(source_channel, current_id)
+                except:
+                    msg = None
+                
+                # Apply filters if message exists
+                if msg and filters:
+                    should_skip = False
+                    
+                    # Check video filter
+                    if filters.get("skip_videos") and (msg.video or msg.video_note or msg.animation):
+                        should_skip = True
+                    # Check photo filter
+                    elif filters.get("skip_photos") and msg.photo:
+                        should_skip = True
+                    # Check file/document filter
+                    elif filters.get("skip_files") and msg.document:
+                        should_skip = True
+                    # Check audio filter
+                    elif filters.get("skip_audio") and (msg.audio or msg.voice):
+                        should_skip = True
+                    # Check sticker filter
+                    elif filters.get("skip_stickers") and msg.sticker:
+                        should_skip = True
+                    # Check text-only filter
+                    elif filters.get("skip_text") and msg.text and not any([
+                        msg.photo, msg.video, msg.document, msg.audio, 
+                        msg.voice, msg.sticker, msg.animation, msg.video_note
+                    ]):
+                        should_skip = True
+                    
+                    if should_skip:
+                        progress["filtered_msg"] = progress.get("filtered_msg", 0) + 1
+                        current_id += 1
+                        continue
                 
                 # Try to copy message
                 await client.copy_message(
@@ -900,7 +937,15 @@ def register_bot_handlers():
                 "skip_number": 0,
                 "last_message_id": 0,
                 "dest_channel": "",
-                "dest_title": ""
+                "dest_title": "",
+                "filters": {
+                    "skip_videos": False,
+                    "skip_photos": False,
+                    "skip_files": False,
+                    "skip_audio": False,
+                    "skip_stickers": False,
+                    "skip_text": False
+                }
             }
             
             cancel_keyboard = InlineKeyboardMarkup([
@@ -1161,8 +1206,110 @@ def register_bot_handlers():
                 dest_channel,
                 wizard["skip_number"],
                 wizard["last_message_id"],
+                wizard.get("filters", {}),
                 client
             ))
+        elif data.startswith("toggle_filter_"):
+            # Toggle a filter option
+            user_id = callback_query.from_user.id
+            filter_name = data.replace("toggle_filter_", "")
+            
+            if user_id not in forward_wizard_state:
+                await callback_query.message.reply("❌ Session expired. Please start again.")
+                return
+            
+            wizard = forward_wizard_state[user_id]
+            if "filters" not in wizard:
+                wizard["filters"] = {
+                    "skip_videos": False,
+                    "skip_photos": False,
+                    "skip_files": False,
+                    "skip_audio": False,
+                    "skip_stickers": False,
+                    "skip_text": False
+                }
+            
+            # Toggle the filter
+            wizard["filters"][filter_name] = not wizard["filters"].get(filter_name, False)
+            
+            # Update the filter selection message
+            filters = wizard["filters"]
+            filter_buttons = [
+                [
+                    InlineKeyboardButton(
+                        f"{'✅' if filters.get('skip_videos') else '❌'} Skip Videos",
+                        callback_data="toggle_filter_skip_videos"
+                    ),
+                    InlineKeyboardButton(
+                        f"{'✅' if filters.get('skip_photos') else '❌'} Skip Photos",
+                        callback_data="toggle_filter_skip_photos"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        f"{'✅' if filters.get('skip_files') else '❌'} Skip Files",
+                        callback_data="toggle_filter_skip_files"
+                    ),
+                    InlineKeyboardButton(
+                        f"{'✅' if filters.get('skip_audio') else '❌'} Skip Audio",
+                        callback_data="toggle_filter_skip_audio"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        f"{'✅' if filters.get('skip_stickers') else '❌'} Skip Stickers",
+                        callback_data="toggle_filter_skip_stickers"
+                    ),
+                    InlineKeyboardButton(
+                        f"{'✅' if filters.get('skip_text') else '❌'} Skip Text Only",
+                        callback_data="toggle_filter_skip_text"
+                    )
+                ],
+                [InlineKeyboardButton("✅ Continue", callback_data="filters_done")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")]
+            ]
+            
+            try:
+                await callback_query.message.edit_reply_markup(
+                    reply_markup=InlineKeyboardMarkup(filter_buttons)
+                )
+            except:
+                pass
+        elif data == "filters_done":
+            # User finished selecting filters, show destination channels
+            user_id = callback_query.from_user.id
+            
+            if user_id not in forward_wizard_state:
+                await callback_query.message.reply("❌ Session expired. Please start again.")
+                return
+            
+            wizard = forward_wizard_state[user_id]
+            wizard["state"] = "waiting_dest"
+            
+            # Get user's saved channels
+            user_channels = []
+            if user_channels_col is not None:
+                saved = user_channels_col.find({"user_id": user_id})
+                user_channels = [c.get("channel") for c in saved if c.get("channel")]
+            
+            if not user_channels:
+                await callback_query.message.reply(
+                    "❌ No destination channels saved!\n\n"
+                    "Please add channels first using:\n"
+                    "/start → 📢 Channel → Add Channel"
+                )
+                forward_wizard_state.pop(user_id, None)
+                return
+            
+            # Create buttons for each channel
+            buttons = [[InlineKeyboardButton(f"📁 {ch}", callback_data=f"select_dest_{i}")] for i, ch in enumerate(user_channels[:10])]
+            buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")])
+            
+            await callback_query.message.reply(
+                f"**( SELECT DESTINATION CHAT )**\n\n"
+                f"Select a channel from your saved channels:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
         elif data == "cancel_fwd_active":
             user_id = callback_query.from_user.id
             if user_id in user_forward_progress:
@@ -1769,7 +1916,7 @@ def register_bot_handlers():
                 )
                 return
             
-            # Handle "waiting_skip" - User enters skip number
+            # Handle "waiting_skip" - User enters skip number, show filter options
             elif state == "waiting_skip":
                 try:
                     skip_number = int(message.text.strip())
@@ -1779,31 +1926,53 @@ def register_bot_handlers():
                     skip_number = 0
                 
                 wizard["skip_number"] = skip_number
-                wizard["state"] = "waiting_dest"
+                wizard["state"] = "waiting_filters"
                 
-                # Get user's saved channels
-                user_channels = []
-                if user_channels_col is not None:
-                    saved = user_channels_col.find({"user_id": user_id})
-                    user_channels = [c.get("channel") for c in saved if c.get("channel")]
-                
-                if not user_channels:
-                    await message.reply(
-                        "❌ No destination channels saved!\n\n"
-                        "Please add channels first using:\n"
-                        "/start → 📢 Channel → Add Channel"
-                    )
-                    forward_wizard_state.pop(user_id, None)
-                    return
-                
-                # Create buttons for each channel
-                buttons = [[InlineKeyboardButton(f"📁 {ch}", callback_data=f"select_dest_{i}")] for i, ch in enumerate(user_channels[:10])]
-                buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")])
+                # Show filter selection
+                filters = wizard.get("filters", {})
+                filter_buttons = [
+                    [
+                        InlineKeyboardButton(
+                            f"{'✅' if filters.get('skip_videos') else '❌'} Skip Videos",
+                            callback_data="toggle_filter_skip_videos"
+                        ),
+                        InlineKeyboardButton(
+                            f"{'✅' if filters.get('skip_photos') else '❌'} Skip Photos",
+                            callback_data="toggle_filter_skip_photos"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            f"{'✅' if filters.get('skip_files') else '❌'} Skip Files",
+                            callback_data="toggle_filter_skip_files"
+                        ),
+                        InlineKeyboardButton(
+                            f"{'✅' if filters.get('skip_audio') else '❌'} Skip Audio",
+                            callback_data="toggle_filter_skip_audio"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            f"{'✅' if filters.get('skip_stickers') else '❌'} Skip Stickers",
+                            callback_data="toggle_filter_skip_stickers"
+                        ),
+                        InlineKeyboardButton(
+                            f"{'✅' if filters.get('skip_text') else '❌'} Skip Text Only",
+                            callback_data="toggle_filter_skip_text"
+                        )
+                    ],
+                    [InlineKeyboardButton("✅ Continue", callback_data="filters_done")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")]
+                ]
                 
                 await message.reply(
-                    f"**( SELECT DESTINATION CHAT )**\n\n"
-                    f"Select a channel from your saved channels:",
-                    reply_markup=InlineKeyboardMarkup(buttons)
+                    f"**( SELECT FILTERS )**\n\n"
+                    f"Select content types to **SKIP** (not forward):\n\n"
+                    f"• Click to toggle ✅/❌\n"
+                    f"• ✅ = Will be SKIPPED\n"
+                    f"• ❌ = Will be forwarded\n\n"
+                    f"Click **Continue** when done.",
+                    reply_markup=InlineKeyboardMarkup(filter_buttons)
                 )
                 return
         
