@@ -3737,6 +3737,59 @@ def register_bot_handlers():
 
                     # Get pending join requests using Bot API
                     # Telegram Bot API uses offset_date + offset_user_id pagination (not "offset").
+                    bot_info = me_json.get("result") or {}
+                    bot_id = bot_info.get("id")
+                    bot_username = bot_info.get("username")
+                    bot_tag = f"@{bot_username}" if bot_username else f"id:{bot_id}"
+
+                    async def _get(path: str, params: dict | None = None):
+                        async with session.get(f"{base_url}/{path}", params=params) as r:
+                            j, t = await _read_json_or_text(r)
+                            return r.status, j, t
+
+                    # Verify the bot can access the target chat (helps when user added a different bot)
+                    _, chat_json, chat_text = await _get("getChat", {"chat_id": chat_id})
+                    if not chat_json or not chat_json.get("ok"):
+                        desc = (chat_json or {}).get("description") or (chat_text or "")
+                        await status_msg.edit(
+                            "❌ **Chat Not Found / No Access**\n\n"
+                            f"Bot: `{bot_tag}`\n"
+                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
+                            "Is bot ko is chat ka access nahi hai.\n\n"
+                            "**Fix:**\n"
+                            "• Isi bot ko (same token wala) channel me ADD karo\n"
+                            "• Admin banao + Join Requests permission/setting ON rakho\n\n"
+                            f"Debug: {(desc or 'No details').strip()[:160]}"
+                        )
+                        return
+
+                    chat_title = (chat_json.get("result") or {}).get("title") or chat_title
+
+                    # Verify bot membership + admin status explicitly
+                    _, member_json, member_text = await _get("getChatMember", {"chat_id": chat_id, "user_id": bot_id})
+                    if not member_json or not member_json.get("ok"):
+                        desc = (member_json or {}).get("description") or (member_text or "")
+                        await status_msg.edit(
+                            "❌ **Bot not in chat / No access**\n\n"
+                            f"Bot: `{bot_tag}`\n"
+                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
+                            "Is bot ko channel me add nahi kiya gaya (ya token kisi aur bot ka hai).\n\n"
+                            "**Fix:** isi bot ko add karke ADMIN banao, phir /approveall try karo.\n\n"
+                            f"Debug: {(desc or 'No details').strip()[:160]}"
+                        )
+                        return
+
+                    bot_status = ((member_json.get("result") or {}).get("status") or "").lower()
+                    if bot_status not in ["administrator", "creator"]:
+                        await status_msg.edit(
+                            "❌ **Bot needs admin permissions**\n\n"
+                            f"Bot: `{bot_tag}`\n"
+                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
+                            "Bot ko ADMIN banao aur required rights do (Join Requests approve ke liye)."
+                        )
+                        return
+
+                    # Now read join requests (pagination with offset_date + offset_user_id)
                     offset_date = None
                     offset_user_id = None
 
@@ -3766,14 +3819,12 @@ def register_bot_handlers():
                                 if error_code == 404 or "not found" in error_desc.lower():
                                     await status_msg.edit(
                                         "❌ **Error: Chat Not Found / No Access**\n\n"
-                                        "Iska matlab:\n"
-                                        "1️⃣ Bot us channel/group me ADD nahi hai\n"
-                                        "2️⃣ Bot ADMIN nahi hai\n"
-                                        "3️⃣ Bot ke paas 'Invite Users via Link' permission nahi\n\n"
+                                        f"Bot: `{bot_tag}`\n"
+                                        f"Chat: `{channel}` (`{chat_id}`)\n\n"
+                                        "Iska matlab: bot ko us channel/group me access nahi hai (ya token kisi aur bot ka hai).\n\n"
                                         "**Fix:**\n"
-                                        f"• {channel} me bot ko ADD karo\n"
-                                        "• Bot ko ADMIN banao\n"
-                                        "• 'Invite Users via Link' ON karo\n"
+                                        "• Isi bot ko ADD karo\n"
+                                        "• ADMIN banao\n"
                                         "• Phir /approveall dobara try karo"
                                     )
                                     return
