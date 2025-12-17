@@ -1528,7 +1528,6 @@ def register_bot_handlers():
                     f"Select an option below:",
                     reply_markup=keyboard
                 )
-                )
             else:
                 bot_info = await client.get_me()
                 ref_link = get_referral_link(bot_info.username, user_id)
