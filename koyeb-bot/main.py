@@ -28,15 +28,32 @@ config_col = db["bot_config"] if db is not None else None
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
 API_HASH = os.getenv("API_HASH", "")
-SESSION_STRING = os.getenv("SESSION_STRING", "")  # For user account
-# Support common env var names used in deploy dashboards
-BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""  # For bot commands
+BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 
 
-# Speed settings - MTProto allows much faster speeds
-BATCH_SIZE = 10  # Messages per batch
-DELAY_BETWEEN_BATCHES = 2  # Seconds - gives ~300/min with 1 account
-DELAY_BETWEEN_MESSAGES = 0.2  # 200ms between individual messages
+def get_all_session_strings():
+    """Get all SESSION_STRING environment variables dynamically"""
+    sessions = []
+    
+    # Check for SESSION_STRING (first one)
+    first_session = os.getenv("SESSION_STRING", "")
+    if first_session:
+        sessions.append(("SESSION_STRING", first_session))
+    
+    # Check for SESSION_STRING_2, SESSION_STRING_3, ... up to 100
+    for i in range(2, 101):
+        key = f"SESSION_STRING_{i}"
+        value = os.getenv(key, "")
+        if value:
+            sessions.append((key, value))
+    
+    return sessions
+
+
+# Speed settings - More accounts = higher speed
+BATCH_SIZE = 10  # Messages per batch per account
+DELAY_BETWEEN_BATCHES = 1  # Reduced delay with multiple accounts
+DELAY_BETWEEN_MESSAGES = 0.1  # 100ms between individual messages
 
 # Global state
 is_forwarding = False
@@ -51,12 +68,14 @@ current_progress = {
     "end_id": 0,
     "is_active": False,
     "speed": 0,
-    "rate_limit_hits": 0
+    "rate_limit_hits": 0,
+    "active_accounts": 0
 }
 
-# Pyrogram clients
-user_client = None  # User account for forwarding (fast)
+# Pyrogram clients - Multiple user accounts for speed
+user_clients = []  # List of (name, client) tuples
 bot_client = None   # Bot for commands/UI
+current_client_index = 0  # For round-robin rotation
 
 
 def get_config():
@@ -109,7 +128,8 @@ def load_progress():
                 "end_id": saved.get("end_id", 0),
                 "is_active": saved.get("is_active", False),
                 "speed": saved.get("speed", 0),
-                "rate_limit_hits": saved.get("rate_limit_hits", 0)
+                "rate_limit_hits": saved.get("rate_limit_hits", 0),
+                "active_accounts": saved.get("active_accounts", 0)
             })
 
 
@@ -134,16 +154,49 @@ def mark_message_forwarded(source_channel, dest_channel, message_id):
         })
 
 
-async def forward_messages(source_channel, dest_channel, start_id, end_id, is_resume=False):
-    """Forward messages using MTProto (user account) - FAST!"""
-    global is_forwarding, stop_requested, current_progress, user_client
+def get_next_client():
+    """Get next client using round-robin rotation"""
+    global current_client_index
     
-    if not user_client:
-        print("User client not initialized!")
+    if not user_clients:
+        return None
+    
+    client = user_clients[current_client_index][1]
+    current_client_index = (current_client_index + 1) % len(user_clients)
+    return client
+
+
+async def forward_single_message(dest_channel, source_channel, msg_id):
+    """Forward a single message using rotating clients"""
+    client = get_next_client()
+    if not client:
+        return False, "No client available"
+    
+    try:
+        await client.copy_message(
+            chat_id=dest_channel,
+            from_chat_id=source_channel,
+            message_id=msg_id
+        )
+        return True, None
+    except FloodWait as e:
+        return False, f"flood:{e.value}"
+    except Exception as e:
+        return False, str(e)
+
+
+async def forward_messages(source_channel, dest_channel, start_id, end_id, is_resume=False):
+    """Forward messages using multiple MTProto accounts - ULTRA FAST!"""
+    global is_forwarding, stop_requested, current_progress
+    
+    if not user_clients:
+        print("No user clients initialized!")
         return
     
     is_forwarding = True
     stop_requested = False
+    
+    num_accounts = len(user_clients)
     
     # Initialize progress
     if not is_resume:
@@ -157,10 +210,12 @@ async def forward_messages(source_channel, dest_channel, start_id, end_id, is_re
             "end_id": end_id,
             "is_active": True,
             "speed": 0,
-            "rate_limit_hits": 0
+            "rate_limit_hits": 0,
+            "active_accounts": num_accounts
         }
     else:
         current_progress["is_active"] = True
+        current_progress["active_accounts"] = num_accounts
     
     save_progress()
     
@@ -168,12 +223,17 @@ async def forward_messages(source_channel, dest_channel, start_id, end_id, is_re
     batch_start_time = time.time()
     batch_count = 0
     
-    print(f"Starting forward: {source_channel} -> {dest_channel}, IDs: {current_id} to {end_id}")
+    # Larger batch size with multiple accounts
+    effective_batch_size = BATCH_SIZE * num_accounts
+    
+    print(f"🚀 Starting forward with {num_accounts} accounts!")
+    print(f"📊 {source_channel} -> {dest_channel}, IDs: {current_id} to {end_id}")
+    print(f"⚡ Expected speed: ~{num_accounts * 30}/min")
     
     try:
         while current_id <= end_id and not stop_requested:
-            # Process batch
-            batch_ids = list(range(current_id, min(current_id + BATCH_SIZE, end_id + 1)))
+            # Process larger batch with multiple accounts
+            batch_ids = list(range(current_id, min(current_id + effective_batch_size, end_id + 1)))
             
             for msg_id in batch_ids:
                 if stop_requested:
@@ -185,50 +245,40 @@ async def forward_messages(source_channel, dest_channel, start_id, end_id, is_re
                     current_progress["current_id"] = msg_id
                     continue
                 
-                try:
-                    # Copy message using user account (MTProto)
-                    await user_client.copy_message(
-                        chat_id=dest_channel,
-                        from_chat_id=source_channel,
-                        message_id=msg_id
-                    )
-                    
+                # Try to forward using rotating clients
+                success, error = await forward_single_message(dest_channel, source_channel, msg_id)
+                
+                if success:
                     current_progress["success_count"] += 1
                     mark_message_forwarded(source_channel, dest_channel, msg_id)
                     batch_count += 1
-                    
-                except FloodWait as e:
+                elif error and error.startswith("flood:"):
                     # Handle rate limit
-                    print(f"FloodWait: sleeping {e.value} seconds")
+                    wait_time = int(error.split(":")[1])
+                    print(f"⚠️ FloodWait: sleeping {wait_time}s")
                     current_progress["rate_limit_hits"] += 1
                     save_progress()
-                    await asyncio.sleep(e.value)
+                    await asyncio.sleep(wait_time)
                     
-                    # Retry this message
-                    try:
-                        await user_client.copy_message(
-                            chat_id=dest_channel,
-                            from_chat_id=source_channel,
-                            message_id=msg_id
-                        )
+                    # Retry with next client
+                    retry_success, _ = await forward_single_message(dest_channel, source_channel, msg_id)
+                    if retry_success:
                         current_progress["success_count"] += 1
                         mark_message_forwarded(source_channel, dest_channel, msg_id)
                         batch_count += 1
-                    except Exception as retry_err:
-                        print(f"Retry failed for {msg_id}: {retry_err}")
+                    else:
                         current_progress["failed_count"] += 1
-                        
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if "message" in error_msg and ("not found" in error_msg or "empty" in error_msg or "deleted" in error_msg):
+                else:
+                    error_lower = error.lower() if error else ""
+                    if "not found" in error_lower or "empty" in error_lower or "deleted" in error_lower:
                         current_progress["skipped_count"] += 1
                     else:
-                        print(f"Error forwarding {msg_id}: {e}")
+                        print(f"❌ Error {msg_id}: {error}")
                         current_progress["failed_count"] += 1
                 
                 current_progress["current_id"] = msg_id
                 
-                # Small delay between messages
+                # Very small delay between messages (multiple accounts handle load)
                 await asyncio.sleep(DELAY_BETWEEN_MESSAGES)
             
             # Calculate speed
@@ -240,37 +290,54 @@ async def forward_messages(source_channel, dest_channel, start_id, end_id, is_re
             save_progress()
             
             # Move to next batch
-            current_id += BATCH_SIZE
+            current_id += effective_batch_size
             
-            # Delay between batches
+            # Shorter delay between batches with multiple accounts
             await asyncio.sleep(DELAY_BETWEEN_BATCHES)
             
-            print(f"Progress: {current_progress['success_count']}/{current_progress['total_count']} @ {current_progress['speed']}/min")
+            print(f"📈 Progress: {current_progress['success_count']}/{current_progress['total_count']} @ {current_progress['speed']}/min ({num_accounts} accounts)")
     
     except Exception as e:
-        print(f"Forward error: {e}")
+        print(f"❌ Forward error: {e}")
     
     finally:
         is_forwarding = False
         current_progress["is_active"] = False
         save_progress()
-        print("Forwarding completed!")
+        print("✅ Forwarding completed!")
 
 
 async def init_clients():
-    """Initialize Pyrogram clients"""
-    global user_client, bot_client
+    """Initialize Pyrogram clients - supports unlimited accounts!"""
+    global user_clients, bot_client
     
-    # User client for fast forwarding (MTProto)
-    if SESSION_STRING and API_ID and API_HASH:
-        user_client = Client(
-            "user_session",
-            api_id=int(API_ID),
-            api_hash=API_HASH,
-            session_string=SESSION_STRING
-        )
-        await user_client.start()
-        print("User client started (MTProto ready)")
+    # Get all session strings from environment
+    session_strings = get_all_session_strings()
+    
+    print(f"🔍 Found {len(session_strings)} session string(s)")
+    
+    # Initialize user clients for fast forwarding (MTProto)
+    if session_strings and API_ID and API_HASH:
+        for idx, (name, session_string) in enumerate(session_strings):
+            try:
+                client = Client(
+                    f"user_session_{idx}",
+                    api_id=int(API_ID),
+                    api_hash=API_HASH,
+                    session_string=session_string
+                )
+                await client.start()
+                user_clients.append((name, client))
+                print(f"✅ {name} connected!")
+            except Exception as e:
+                print(f"❌ Failed to start {name}: {e}")
+    
+    print(f"🚀 Total active accounts: {len(user_clients)}")
+    
+    # Calculate expected speed
+    if user_clients:
+        expected_speed = len(user_clients) * 30  # ~30 msgs/min per account
+        print(f"⚡ Expected forwarding speed: ~{expected_speed}/min")
     
     # Bot client for commands
     if BOT_TOKEN and API_ID and API_HASH:
@@ -281,7 +348,7 @@ async def init_clients():
             bot_token=BOT_TOKEN
         )
         await bot_client.start()
-        print("Bot client started")
+        print("🤖 Bot client started")
         
         # Register handlers
         register_bot_handlers()
@@ -292,16 +359,36 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("start"))
     async def start_handler(client, message):
+        num_accounts = len(user_clients)
+        expected_speed = num_accounts * 30 if num_accounts else 0
+        
         await message.reply(
-            "🚀 **Telegram Forwarder Bot (MTProto)**\n\n"
-            "⚡ High-speed forwarding: 250-300/min\n\n"
-            "Commands:\n"
-            "/setconfig <source> <dest> - Set channels\n"
-            "/forward <start_id> <end_id> - Start forwarding\n"
-            "/resume - Resume forwarding\n"
-            "/stop - Stop forwarding\n"
-            "/progress - Show progress\n"
-            "/status - Show status"
+            f"🚀 **Telegram Forwarder Bot (Multi-Account MTProto)**\n\n"
+            f"👥 Active accounts: {num_accounts}\n"
+            f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+            f"Commands:\n"
+            f"/setconfig <source> <dest> - Set channels\n"
+            f"/forward <start_id> <end_id> - Start forwarding\n"
+            f"/resume - Resume forwarding\n"
+            f"/stop - Stop forwarding\n"
+            f"/progress - Show progress\n"
+            f"/status - Show status\n"
+            f"/accounts - Show connected accounts"
+        )
+    
+    @bot_client.on_message(filters.command("accounts"))
+    async def accounts_handler(client, message):
+        if not user_clients:
+            await message.reply("❌ No accounts connected!")
+            return
+        
+        account_list = "\n".join([f"✅ {name}" for name, _ in user_clients])
+        expected_speed = len(user_clients) * 30
+        
+        await message.reply(
+            f"👥 **Connected Accounts ({len(user_clients)})**\n\n"
+            f"{account_list}\n\n"
+            f"⚡ Expected speed: ~{expected_speed}/min"
         )
     
     @bot_client.on_message(filters.command("setconfig"))
@@ -327,6 +414,10 @@ def register_bot_handlers():
             await message.reply("⚠️ Forwarding already in progress!")
             return
         
+        if not user_clients:
+            await message.reply("❌ No user accounts connected! Add SESSION_STRING to environment.")
+            return
+        
         try:
             parts = message.text.split()
             if len(parts) != 3:
@@ -341,7 +432,14 @@ def register_bot_handlers():
                 await message.reply("❌ Please set config first: /setconfig")
                 return
             
-            await message.reply(f"🚀 Starting forward: {start_id} to {end_id}\n⚡ Speed: ~300/min")
+            num_accounts = len(user_clients)
+            expected_speed = num_accounts * 30
+            
+            await message.reply(
+                f"🚀 Starting forward: {start_id} to {end_id}\n"
+                f"👥 Using {num_accounts} account(s)\n"
+                f"⚡ Expected speed: ~{expected_speed}/min"
+            )
             
             # Start forwarding in background
             asyncio.create_task(forward_messages(
@@ -362,6 +460,10 @@ def register_bot_handlers():
             await message.reply("⚠️ Forwarding already in progress!")
             return
         
+        if not user_clients:
+            await message.reply("❌ No user accounts connected!")
+            return
+        
         load_progress()
         
         if current_progress["current_id"] == 0:
@@ -373,7 +475,12 @@ def register_bot_handlers():
             await message.reply("❌ No config found")
             return
         
-        await message.reply(f"🔄 Resuming from ID: {current_progress['current_id']}")
+        num_accounts = len(user_clients)
+        
+        await message.reply(
+            f"🔄 Resuming from ID: {current_progress['current_id']}\n"
+            f"👥 Using {num_accounts} account(s)"
+        )
         
         asyncio.create_task(forward_messages(
             config["source_channel"],
@@ -404,6 +511,7 @@ def register_bot_handlers():
             f"⏭️ Skipped: {current_progress['skipped_count']}\n"
             f"📈 Total: {done}/{total} ({pct}%)\n"
             f"⚡ Speed: {current_progress['speed']}/min\n"
+            f"👥 Accounts: {current_progress.get('active_accounts', 1)}\n"
             f"🔄 Active: {'Yes' if current_progress['is_active'] else 'No'}\n"
             f"⚠️ Rate limits: {current_progress['rate_limit_hits']}"
         )
@@ -411,12 +519,15 @@ def register_bot_handlers():
     @bot_client.on_message(filters.command("status"))
     async def status_handler(client, message):
         config = get_config()
+        num_accounts = len(user_clients)
+        expected_speed = num_accounts * 30 if num_accounts else 0
         
         await message.reply(
             f"📡 **Status**\n\n"
             f"Source: {config.get('source_channel', 'Not set')}\n"
             f"Dest: {config.get('dest_channel', 'Not set')}\n"
-            f"User Client: {'✅ Connected' if user_client else '❌ Not connected'}\n"
+            f"👥 Connected accounts: {num_accounts}\n"
+            f"⚡ Expected speed: ~{expected_speed}/min\n"
             f"Forwarding: {'🟢 Active' if is_forwarding else '⚪ Idle'}"
         )
 
@@ -424,14 +535,20 @@ def register_bot_handlers():
 # Flask routes for health checks
 @flask_app.route("/")
 def home():
-    return jsonify({"status": "ok", "message": "Telegram Forwarder Bot (MTProto)"})
+    num_accounts = len(user_clients)
+    return jsonify({
+        "status": "ok", 
+        "message": "Telegram Forwarder Bot (Multi-Account MTProto)",
+        "accounts": num_accounts,
+        "expected_speed": f"{num_accounts * 30}/min"
+    })
 
 
 @flask_app.route("/health")
 def health():
     return jsonify({
         "status": "healthy",
-        "user_client": user_client is not None,
+        "user_clients": len(user_clients),
         "bot_client": bot_client is not None,
         "is_forwarding": is_forwarding
     })
@@ -443,6 +560,15 @@ def get_progress():
     return jsonify(current_progress)
 
 
+@flask_app.route("/accounts")
+def get_accounts():
+    return jsonify({
+        "count": len(user_clients),
+        "accounts": [name for name, _ in user_clients],
+        "expected_speed": f"{len(user_clients) * 30}/min"
+    })
+
+
 def run_flask():
     """Run Flask in a separate thread"""
     port = int(os.getenv("PORT", 8000))
@@ -451,7 +577,9 @@ def run_flask():
 
 async def main():
     """Main entry point"""
-    print("Starting Telegram Forwarder Bot (MTProto)...")
+    print("=" * 50)
+    print("🚀 Telegram Forwarder Bot (Multi-Account MTProto)")
+    print("=" * 50)
     
     # Load saved progress
     load_progress()
@@ -463,7 +591,10 @@ async def main():
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    print("Bot is running!")
+    print("\n✅ Bot is running!")
+    print(f"👥 Total accounts: {len(user_clients)}")
+    print(f"⚡ Expected speed: ~{len(user_clients) * 30}/min")
+    print("=" * 50)
     
     # Use Pyrogram's idle to keep bot running and processing updates
     await idle()
