@@ -67,8 +67,7 @@ REQUIRED_REFERRALS = int(os.getenv("REQUIRED_REFERRALS", "10"))
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
 API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
-
+BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 
 def get_all_session_strings():
     """Get all SESSION_STRING environment variables dynamically"""
@@ -3518,13 +3517,16 @@ def register_bot_handlers():
         # Check if user is bot admin or group admin
         user_id = message.from_user.id if message.from_user else None
 
-        # If command is sent *as the channel itself* (no from_user), allow it.
-        # In Telegram, only channel admins can post as the channel.
+        # If command is sent *as a channel itself* (no from_user), allow it.
+        # In Telegram, only channel admins can post as a channel.
+        # This can happen in:
+        # - a channel (chat.type == CHANNEL)
+        # - a group/supergroup when "Send as channel" is used (message.sender_chat is a channel)
+        sender_chat = getattr(message, "sender_chat", None)
         is_channel_post = (
             user_id is None
-            and getattr(message, "sender_chat", None) is not None
-            and message.chat.type == ChatType.CHANNEL
-            and message.sender_chat.id == message.chat.id
+            and sender_chat is not None
+            and getattr(sender_chat, "type", None) == ChatType.CHANNEL
         )
 
         if not is_channel_post and user_id not in BOT_ADMINS:
