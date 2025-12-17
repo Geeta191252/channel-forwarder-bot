@@ -3546,36 +3546,74 @@ def register_bot_handlers():
             try:
                 # Get chat info using bot client
                 chat = await client.get_chat(channel)
+                chat_id = chat.id
                 
-                # Iterate through pending join requests using BOT client
-                async for request in client.get_chat_join_requests(chat.id):
-                    try:
-                        await client.approve_chat_join_request(chat.id, request.user.id)
-                        approved += 1
-                        auto_approve_stats["approved"] += 1
+                # Use raw Bot API to get join requests - more reliable for bots
+                import aiohttp
+                bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                base_url = f"https://api.telegram.org/bot{bot_token}"
+                
+                async with aiohttp.ClientSession() as session:
+                    # Get pending join requests using Bot API
+                    offset = None
+                    while True:
+                        params = {"chat_id": chat_id, "limit": 100}
+                        if offset:
+                            params["offset"] = offset
                         
-                        # Update status every 50 approvals
-                        if approved % 50 == 0:
-                            try:
-                                await status_msg.edit(f"🔄 Approving...\n✅ Approved: {approved}\n❌ Failed: {failed}")
-                            except:
-                                pass
-                        
-                        # Small delay to avoid rate limits
-                        await asyncio.sleep(0.3)
-                    except FloodWait as e:
-                        await asyncio.sleep(e.value)
-                        try:
-                            await client.approve_chat_join_request(chat.id, request.user.id)
-                            approved += 1
-                            auto_approve_stats["approved"] += 1
-                        except:
-                            failed += 1
-                            auto_approve_stats["failed"] += 1
-                    except Exception as e:
-                        failed += 1
-                        auto_approve_stats["failed"] += 1
-                        print(f"Failed to approve {request.user.id}: {e}")
+                        async with session.get(f"{base_url}/getChatJoinRequests", params=params) as resp:
+                            data = await resp.json()
+                            
+                            if not data.get("ok"):
+                                error_desc = data.get("description", "Unknown error")
+                                if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower():
+                                    await status_msg.edit(
+                                        f"❌ **Bot needs admin permissions!**\n\n"
+                                        f"Make the bot admin in {channel} with:\n"
+                                        f"• ✅ Invite Users via Link"
+                                    )
+                                    return
+                                raise Exception(error_desc)
+                            
+                            requests = data.get("result", [])
+                            if not requests:
+                                break
+                            
+                            for req in requests:
+                                user_id = req.get("user", {}).get("id")
+                                if user_id:
+                                    try:
+                                        # Approve using Bot API
+                                        approve_params = {"chat_id": chat_id, "user_id": user_id}
+                                        async with session.post(f"{base_url}/approveChatJoinRequest", data=approve_params) as approve_resp:
+                                            approve_data = await approve_resp.json()
+                                            if approve_data.get("ok"):
+                                                approved += 1
+                                                auto_approve_stats["approved"] += 1
+                                            else:
+                                                failed += 1
+                                                auto_approve_stats["failed"] += 1
+                                        
+                                        # Update status every 50 approvals
+                                        if approved % 50 == 0:
+                                            try:
+                                                await status_msg.edit(f"🔄 Approving...\n✅ Approved: {approved}\n❌ Failed: {failed}")
+                                            except:
+                                                pass
+                                        
+                                        # Small delay to avoid rate limits
+                                        await asyncio.sleep(0.3)
+                                    except Exception as e:
+                                        failed += 1
+                                        auto_approve_stats["failed"] += 1
+                                        print(f"Failed to approve {user_id}: {e}")
+                            
+                            # Check if there are more requests
+                            if len(requests) < 100:
+                                break
+                            # Use last user as offset for pagination
+                            last_user = requests[-1].get("user", {})
+                            offset = last_user.get("id")
                 
                 await status_msg.edit(
                     f"✅ **Approval Complete!**\n\n"
@@ -3585,11 +3623,11 @@ def register_bot_handlers():
                 )
             except Exception as e:
                 error_msg = str(e)
-                if "CHAT_ADMIN_REQUIRED" in error_msg:
+                if "CHAT_ADMIN_REQUIRED" in error_msg or "not enough rights" in error_msg.lower():
                     await status_msg.edit(
                         f"❌ **Bot needs admin permissions!**\n\n"
                         f"Make the bot admin in {channel} with:\n"
-                        f"• ✅ Add Members / Invite Users via Link"
+                        f"• ✅ Invite Users via Link"
                     )
                 else:
                     await status_msg.edit(f"❌ Error: {e}")
