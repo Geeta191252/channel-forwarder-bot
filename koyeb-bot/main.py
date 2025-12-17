@@ -6,6 +6,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.enums import ChatType, ChatMemberStatus
 from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate, MessageNotModified
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -56,6 +57,9 @@ ADMIN_IDS = set()
 admin_ids_env = os.getenv("ADMIN_IDS", "") or os.getenv("ADMIN_USER_ID", "")
 if admin_ids_env:
     ADMIN_IDS = set(int(x.strip()) for x in admin_ids_env.split(",") if x.strip().isdigit())
+
+# Bot admin ids (used by /approveall etc.)
+BOT_ADMINS = ADMIN_IDS
 
 # Referral requirement
 REQUIRED_REFERRALS = int(os.getenv("REQUIRED_REFERRALS", "10"))
@@ -3550,7 +3554,10 @@ def register_bot_handlers():
                 
                 # Use raw Bot API to get join requests - more reliable for bots
                 import aiohttp
-                bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                bot_token = BOT_TOKEN
+                if not bot_token:
+                    await status_msg.edit("❌ Bot token missing in environment (BOT_TOKEN / TELEGRAM_BOT_TOKEN).")
+                    return
                 base_url = f"https://api.telegram.org/bot{bot_token}"
                 
                 async with aiohttp.ClientSession() as session:
