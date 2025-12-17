@@ -123,9 +123,12 @@ logo_config = {
 logo_stats = {"watermarked": 0, "failed": 0}
 
 # Content Moderation state
-moderation_config = {}  # {chat_id: {block_forward, block_links, block_badwords, block_mentions, enabled}}
-moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0, "deleted_mentions": 0, "warnings": 0, "bans": 0}
+moderation_config = {}  # {chat_id: {block_forward, block_links, block_badwords, block_mentions, auto_delete_2min, enabled}}
+moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0, "deleted_mentions": 0, "warnings": 0, "bans": 0, "auto_deleted": 0}
 user_warnings = {}  # {(chat_id, user_id): warning_count}
+
+# Auto-delete message queue: {chat_id: [(message_id, timestamp), ...]}
+auto_delete_queue = {}
 MAX_WARNINGS = 3  # Auto-ban after this many warnings
 
 # Bad words list for content filtering (Hindi + English inappropriate/sexual words)
@@ -209,10 +212,11 @@ def load_moderation_config(chat_id):
                 "block_forward": saved.get("block_forward", False),
                 "block_links": saved.get("block_links", False),
                 "block_badwords": saved.get("block_badwords", False),
-                "block_mentions": saved.get("block_mentions", False)
+                "block_mentions": saved.get("block_mentions", False),
+                "auto_delete_2min": saved.get("auto_delete_2min", False)
             }
             return moderation_config[chat_id]
-    return {"enabled": False, "block_forward": False, "block_links": False, "block_badwords": False, "block_mentions": False}
+    return {"enabled": False, "block_forward": False, "block_links": False, "block_badwords": False, "block_mentions": False, "auto_delete_2min": False}
 
 
 def save_moderation_config(chat_id):
@@ -1931,14 +1935,16 @@ def register_bot_handlers():
             
             await safe_edit_message(
                 callback_query.message,
-                "🆘 **Admin Controls - Block @Mentions**\n\n"
-                "Block @username, @bot, @channel mentions in group!\n\n"
-                "**Commands (in group):**\n"
-                "/blockmention - Toggle @mention blocking\n"
+                "🆘 **Admin Controls**\n\n"
+                "**Block @Mentions:**\n"
+                "/blockmention - Toggle @mention blocking\n\n"
+                "**Auto-Delete 2 min:**\n"
+                "/autodelete2min - Toggle auto-delete messages after 2 min\n\n"
+                "**Other Commands (in group):**\n"
                 "/enablemod - Enable moderation first\n"
                 "/modstatus - View all settings\n\n"
-                "⚡ When enabled, any message with @username will be deleted!\n"
-                "👮 Admins are exempt from this filter.",
+                "⚡ Auto-delete will delete ALL messages in group after 2 minutes!\n"
+                "👮 Admins are exempt from filters.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
                 ])
@@ -2959,6 +2965,77 @@ def register_bot_handlers():
         status = "🟢 ON" if not current else "🔴 OFF"
         await message.reply(f"📛 **Block @Mentions:** {status}\n\nAll @username, @bot, @channel mentions will be deleted!")
     
+    @bot_client.on_message(filters.command("autodelete2min") & filters.group)
+    async def autodelete2min_handler(client, message):
+        """Toggle auto-delete messages after 2 minutes"""
+        global moderation_config, auto_delete_queue
+        
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+
+        is_bot_admin = bool(user_id and user_id in ADMIN_IDS)
+        is_group_admin = False
+
+        if message.sender_chat and message.sender_chat.id == chat_id:
+            is_group_admin = True
+        elif user_id:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                if member.status in ["administrator", "creator"]:
+                    is_group_admin = True
+            except Exception:
+                pass
+
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can change this!")
+            return
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        current = moderation_config[chat_id].get("auto_delete_2min", False)
+        moderation_config[chat_id]["auto_delete_2min"] = not current
+        moderation_config[chat_id]["enabled"] = True
+        save_moderation_config(chat_id)
+        
+        # Initialize queue for this chat if enabling
+        if not current:
+            auto_delete_queue[chat_id] = []
+        
+        status = "🟢 ON" if not current else "🔴 OFF"
+        await message.reply(f"🗑️ **Auto-Delete 2min:** {status}\n\nAll messages in this group will be deleted after 2 minutes!")
+    
+    # ============ AUTO-DELETE 2MIN MESSAGE HANDLER ============
+    
+    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=99)
+    async def auto_delete_message_handler(client, message):
+        """Queue messages for auto-deletion after 2 minutes"""
+        global auto_delete_queue
+        
+        chat_id = message.chat.id
+        
+        # Check if auto-delete is enabled for this chat
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        config = moderation_config.get(chat_id, {})
+        if not config.get("auto_delete_2min"):
+            return
+        
+        # Queue the message for deletion
+        message_id = message.id
+        
+        # Create task to delete after 2 minutes
+        async def delete_after_2min():
+            try:
+                await asyncio.sleep(120)  # 2 minutes = 120 seconds
+                await client.delete_messages(chat_id, message_id)
+                moderation_stats["auto_deleted"] += 1
+            except Exception as e:
+                print(f"Failed to auto-delete message {message_id}: {e}")
+        
+        asyncio.create_task(delete_after_2min())
+    
     @bot_client.on_message(filters.command("modstatus") & filters.group)
     async def modstatus_handler(client, message):
         """Show moderation status"""
@@ -2975,12 +3052,14 @@ def register_bot_handlers():
             f"**Block Forwards:** {'🟢 ON' if config.get('block_forward') else '🔴 OFF'}\n"
             f"**Block Links:** {'🟢 ON' if config.get('block_links') else '🔴 OFF'}\n"
             f"**Block Bad Words:** {'🟢 ON' if config.get('block_badwords') else '🔴 OFF'}\n"
-            f"**Block @Mentions:** {'🟢 ON' if config.get('block_mentions') else '🔴 OFF'}\n\n"
+            f"**Block @Mentions:** {'🟢 ON' if config.get('block_mentions') else '🔴 OFF'}\n"
+            f"**Auto-Delete 2min:** {'🟢 ON' if config.get('auto_delete_2min') else '🔴 OFF'}\n\n"
             f"📊 **Stats:**\n"
             f"📨 Deleted forwards: {moderation_stats['deleted_forward']}\n"
             f"🔗 Deleted links: {moderation_stats['deleted_links']}\n"
             f"🚫 Deleted bad words: {moderation_stats['deleted_badwords']}\n"
             f"📛 Deleted mentions: {moderation_stats['deleted_mentions']}\n"
+            f"🗑️ Auto-deleted: {moderation_stats['auto_deleted']}\n"
             f"⚠️ Total warnings: {moderation_stats['warnings']}\n"
             f"🔨 Auto-bans: {moderation_stats['bans']}"
         )
