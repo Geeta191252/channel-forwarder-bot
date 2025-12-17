@@ -34,6 +34,10 @@ warnings_col = db["user_warnings"] if db is not None else None
 user_channels_col = db["user_channels"] if db is not None else None
 force_sub_col = db["force_subscribe"] if db is not None else None
 referrals_col = db["referrals"] if db is not None else None
+bot_settings_col = db["bot_settings"] if db is not None else None
+
+# Public access control
+public_access_enabled = False  # Default: only admins can use bot
 
 # User state for channel input
 user_channel_state = {}  # {user_id: "waiting_add_channel"}
@@ -169,6 +173,27 @@ def save_logo_config():
         logo_col.update_one(
             {},
             {"$set": {**logo_config, "updated_at": datetime.utcnow()}},
+            upsert=True
+        )
+
+
+def load_public_access():
+    """Load public access setting from database"""
+    global public_access_enabled
+    if bot_settings_col is not None:
+        saved = bot_settings_col.find_one({"setting": "public_access"})
+        if saved:
+            public_access_enabled = saved.get("enabled", False)
+
+
+def save_public_access(enabled):
+    """Save public access setting to database"""
+    global public_access_enabled
+    public_access_enabled = enabled
+    if bot_settings_col is not None:
+        bot_settings_col.update_one(
+            {"setting": "public_access"},
+            {"$set": {"enabled": enabled, "updated_at": datetime.utcnow()}},
             upsert=True
         )
 
@@ -1044,6 +1069,10 @@ async def init_clients():
     if logo_config.get("enabled"):
         print(f"🖼️ Logo watermark enabled")
     
+    # Load public access setting from database
+    load_public_access()
+    print(f"🌐 Public access: {'✅ ENABLED' if public_access_enabled else '❌ DISABLED (Only admins)'}")
+    
     # Get all session strings from environment
     session_strings = get_all_session_strings()
     
@@ -1107,6 +1136,33 @@ def register_bot_handlers():
             f"👥 **Bot admin IDs loaded:** {len(ADMIN_IDS)}"
         )
     
+    @bot_client.on_message(filters.command(["enablepublic", "publicon"]) & filters.private)
+    async def enable_public_handler(client, message):
+        user_id = message.from_user.id if message.from_user else None
+        if not user_id or user_id not in ADMIN_IDS:
+            return await message.reply("❌ Only bot admins can use this command.")
+        
+        save_public_access(True)
+        await message.reply(
+            "✅ **Public Access Enabled!**\n\n"
+            "Now all users can start and use this bot.\n"
+            "Use /disablepublic to disable public access."
+        )
+    
+    @bot_client.on_message(filters.command(["disablepublic", "publicoff"]) & filters.private)
+    async def disable_public_handler(client, message):
+        user_id = message.from_user.id if message.from_user else None
+        if not user_id or user_id not in ADMIN_IDS:
+            return await message.reply("❌ Only bot admins can use this command.")
+        
+        save_public_access(False)
+        await message.reply(
+            "🔒 **Public Access Disabled!**\n\n"
+            "Now only bot admins can use this bot.\n"
+            "Other users will see 'Private Mode' message.\n\n"
+            "Use /enablepublic to enable public access."
+        )
+    
     @bot_client.on_message(filters.command("start"))
     async def start_handler(client, message):
         user_id = message.from_user.id
@@ -1129,6 +1185,16 @@ def register_bot_handlers():
         # Check if user is admin (skip all requirements)
         if is_admin(user_id):
             return await show_main_menu(client, message)
+        
+        # Check public access - if disabled, only admins can use bot
+        if not public_access_enabled:
+            await message.reply(
+                "🔒 **Bot is Private Mode**\n\n"
+                "This bot is currently in private mode.\n"
+                "Only admins can use it.\n\n"
+                "Please wait until admin enables public access."
+            )
+            return
         
         # Check force subscribe first
         if force_subscribe_channels:
