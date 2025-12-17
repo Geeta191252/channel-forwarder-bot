@@ -25,6 +25,7 @@ sessions_col = db["user_sessions"] if db is not None else None
 progress_col = db["forwarding_progress"] if db is not None else None
 forwarded_col = db["forwarded_messages"] if db is not None else None
 config_col = db["bot_config"] if db is not None else None
+autoapprove_col = db["auto_approve"] if db is not None else None
 
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
@@ -72,6 +73,10 @@ current_progress = {
     "rate_limit_hits": 0,
     "active_accounts": 0
 }
+
+# Auto-approve state
+auto_approve_channels = set()  # Set of channel IDs with auto-approve enabled
+auto_approve_stats = {"approved": 0, "failed": 0}
 
 # Pyrogram clients - Multiple user accounts for speed
 user_clients = []  # List of (name, client) tuples
@@ -310,7 +315,14 @@ async def forward_messages(source_channel, dest_channel, start_id, end_id, is_re
 
 async def init_clients():
     """Initialize Pyrogram clients - supports unlimited accounts!"""
-    global user_clients, bot_client
+    global user_clients, bot_client, auto_approve_channels
+    
+    # Load auto-approve channels from database
+    if autoapprove_col is not None:
+        enabled_channels = autoapprove_col.find({"enabled": True})
+        for doc in enabled_channels:
+            auto_approve_channels.add(doc["channel"])
+        print(f"📥 Loaded {len(auto_approve_channels)} auto-approve channels")
     
     # Get all session strings from environment
     session_strings = get_all_session_strings()
@@ -420,9 +432,19 @@ def register_bot_handlers():
                 "For support, contact: @YourAdminUsername"
             )
         elif data == "join_request":
+            channels_list = "\n".join([f"• `{ch}`" for ch in auto_approve_channels]) if auto_approve_channels else "None"
             await callback_query.message.reply(
-                "📥 **Join Request**\n\n"
-                "Auto-approve join requests feature coming soon!"
+                "📥 **Join Request Auto-Approve**\n\n"
+                f"**Status:** {'🟢 Active' if auto_approve_channels else '🔴 Inactive'}\n"
+                f"**Channels:** {len(auto_approve_channels)}\n"
+                f"✅ Approved: {auto_approve_stats['approved']}\n"
+                f"❌ Failed: {auto_approve_stats['failed']}\n\n"
+                f"**Active Channels:**\n{channels_list}\n\n"
+                "**Commands:**\n"
+                "/autoapprove <channel> - Enable auto-approve\n"
+                "/stopapprove <channel> - Disable auto-approve\n"
+                "/approveall <channel> - Accept all pending requests\n"
+                "/approvelist - Show all auto-approve channels"
             )
         elif data == "file_logo":
             await callback_query.message.reply(
@@ -596,8 +618,180 @@ def register_bot_handlers():
             f"Dest: {config.get('dest_channel', 'Not set')}\n"
             f"👥 Connected accounts: {num_accounts}\n"
             f"⚡ Expected speed: ~{expected_speed}/min\n"
-            f"Forwarding: {'🟢 Active' if is_forwarding else '⚪ Idle'}"
+            f"Forwarding: {'🟢 Active' if is_forwarding else '⚪ Idle'}\n"
+            f"📥 Auto-approve channels: {len(auto_approve_channels)}"
         )
+    
+    # ============ JOIN REQUEST AUTO-APPROVE HANDLERS ============
+    
+    @bot_client.on_message(filters.command("autoapprove"))
+    async def autoapprove_handler(client, message):
+        """Enable auto-approve for a channel"""
+        try:
+            parts = message.text.split()
+            if len(parts) != 2:
+                await message.reply("Usage: /autoapprove <channel>\nExample: /autoapprove @mychannel")
+                return
+            
+            channel = parts[1]
+            auto_approve_channels.add(channel)
+            
+            # Save to database
+            if autoapprove_col is not None:
+                autoapprove_col.update_one(
+                    {"channel": channel},
+                    {"$set": {"channel": channel, "enabled": True, "updated_at": datetime.utcnow()}},
+                    upsert=True
+                )
+            
+            await message.reply(
+                f"✅ Auto-approve enabled for: {channel}\n\n"
+                f"All join requests will be automatically approved!\n"
+                f"Use /stopapprove {channel} to disable."
+            )
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
+    
+    @bot_client.on_message(filters.command("stopapprove"))
+    async def stopapprove_handler(client, message):
+        """Disable auto-approve for a channel"""
+        try:
+            parts = message.text.split()
+            if len(parts) != 2:
+                await message.reply("Usage: /stopapprove <channel>")
+                return
+            
+            channel = parts[1]
+            auto_approve_channels.discard(channel)
+            
+            # Update database
+            if autoapprove_col is not None:
+                autoapprove_col.update_one(
+                    {"channel": channel},
+                    {"$set": {"enabled": False, "updated_at": datetime.utcnow()}}
+                )
+            
+            await message.reply(f"🛑 Auto-approve disabled for: {channel}")
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
+    
+    @bot_client.on_message(filters.command("approvelist"))
+    async def approvelist_handler(client, message):
+        """List all auto-approve channels"""
+        if not auto_approve_channels:
+            await message.reply("📥 No auto-approve channels configured.\n\nUse /autoapprove <channel> to enable.")
+            return
+        
+        channels_list = "\n".join([f"• {ch}" for ch in auto_approve_channels])
+        await message.reply(
+            f"📥 **Auto-Approve Channels ({len(auto_approve_channels)})**\n\n"
+            f"{channels_list}\n\n"
+            f"✅ Approved: {auto_approve_stats['approved']}\n"
+            f"❌ Failed: {auto_approve_stats['failed']}"
+        )
+    
+    @bot_client.on_message(filters.command("approveall"))
+    async def approveall_handler(client, message):
+        """Approve all pending join requests for a channel"""
+        global auto_approve_stats
+        
+        if not user_clients:
+            await message.reply("❌ No user accounts connected!")
+            return
+        
+        try:
+            parts = message.text.split()
+            if len(parts) != 2:
+                await message.reply("Usage: /approveall <channel>\nExample: /approveall @mychannel")
+                return
+            
+            channel = parts[1]
+            user_client = user_clients[0][1]  # Use first user client
+            
+            await message.reply(f"🔄 Approving all pending requests for {channel}...")
+            
+            approved = 0
+            failed = 0
+            
+            try:
+                # Get chat to get chat_id
+                chat = await user_client.get_chat(channel)
+                
+                # Iterate through pending join requests
+                async for request in user_client.get_chat_join_requests(chat.id):
+                    try:
+                        await user_client.approve_chat_join_request(chat.id, request.user.id)
+                        approved += 1
+                        auto_approve_stats["approved"] += 1
+                        
+                        # Small delay to avoid rate limits
+                        await asyncio.sleep(0.5)
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value)
+                        try:
+                            await user_client.approve_chat_join_request(chat.id, request.user.id)
+                            approved += 1
+                            auto_approve_stats["approved"] += 1
+                        except:
+                            failed += 1
+                            auto_approve_stats["failed"] += 1
+                    except Exception as e:
+                        failed += 1
+                        auto_approve_stats["failed"] += 1
+                        print(f"Failed to approve {request.user.id}: {e}")
+                
+                await message.reply(
+                    f"✅ **Approval Complete!**\n\n"
+                    f"Channel: {channel}\n"
+                    f"✅ Approved: {approved}\n"
+                    f"❌ Failed: {failed}"
+                )
+            except Exception as e:
+                await message.reply(f"❌ Error accessing channel: {e}")
+        
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
+    
+    # ============ CHAT JOIN REQUEST HANDLER (Auto-approve) ============
+    
+    @bot_client.on_chat_join_request()
+    async def join_request_handler(client, chat_join_request):
+        """Automatically approve join requests for enabled channels"""
+        global auto_approve_stats
+        
+        chat_id = str(chat_join_request.chat.id)
+        chat_username = f"@{chat_join_request.chat.username}" if chat_join_request.chat.username else chat_id
+        
+        # Check if auto-approve is enabled for this channel
+        should_approve = (
+            chat_id in auto_approve_channels or
+            chat_username in auto_approve_channels or
+            chat_join_request.chat.username in auto_approve_channels
+        )
+        
+        if not should_approve:
+            return
+        
+        try:
+            # Use user client if available, otherwise bot client
+            if user_clients:
+                user_client = user_clients[0][1]
+                await user_client.approve_chat_join_request(
+                    chat_join_request.chat.id,
+                    chat_join_request.from_user.id
+                )
+            else:
+                await client.approve_chat_join_request(
+                    chat_join_request.chat.id,
+                    chat_join_request.from_user.id
+                )
+            
+            auto_approve_stats["approved"] += 1
+            print(f"✅ Auto-approved: {chat_join_request.from_user.first_name} for {chat_username}")
+        
+        except Exception as e:
+            auto_approve_stats["failed"] += 1
+            print(f"❌ Failed to auto-approve: {e}")
 
 
 # Flask routes for health checks
