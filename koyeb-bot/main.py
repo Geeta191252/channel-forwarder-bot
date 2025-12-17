@@ -260,9 +260,37 @@ def load_force_subscribe():
                 "invite_link": ch.get("invite_link", "")
             })
     
-    # Load from environment variables (FORCE_SUB_1, FORCE_SUB_2, ... up to 50)
+    # Load from environment variables - New format like screenshot
+    # FORCE_SUB_CHANNELS = -1002200226545,-1001234567890 (comma-separated IDs)
+    # FORCE_SUB_CHANNEL_NAMES = Update Channel,My Group (comma-separated names)
+    # FORCE_SUB_LINKS = https://t.me/+abc,https://t.me/+xyz (comma-separated links)
+    channels_env = os.getenv("FORCE_SUB_CHANNELS", "")
+    names_env = os.getenv("FORCE_SUB_CHANNEL_NAMES", "")
+    links_env = os.getenv("FORCE_SUB_LINKS", "")
+    
+    if channels_env:
+        channel_ids = [c.strip() for c in channels_env.split(",") if c.strip()]
+        channel_names = [n.strip() for n in names_env.split(",") if n.strip()] if names_env else []
+        channel_links = [l.strip() for l in links_env.split(",") if l.strip()] if links_env else []
+        
+        for i, channel_id in enumerate(channel_ids):
+            # Get name (use channel_id if not provided)
+            channel_name = channel_names[i] if i < len(channel_names) else f"Channel {i+1}"
+            # Get link (empty if not provided)
+            invite_link = channel_links[i] if i < len(channel_links) else ""
+            
+            # Check if already in list
+            existing = [ch for ch in force_subscribe_channels if ch["channel_id"] == channel_id]
+            if not existing:
+                force_subscribe_channels.append({
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "invite_link": invite_link
+                })
+                print(f"📢 Force sub from env: {channel_name} ({channel_id})")
+    
+    # Also support old format (FORCE_SUB_1, FORCE_SUB_2, ... up to 50)
     # Format: FORCE_SUB_1=@channel|Channel Name|https://t.me/channel
-    # OR: FORCE_SUB_1=@channel (name and link auto-generated)
     for i in range(1, 51):
         env_var = os.getenv(f"FORCE_SUB_{i}", "")
         if env_var:
