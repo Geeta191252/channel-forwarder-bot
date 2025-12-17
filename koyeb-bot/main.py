@@ -2659,15 +2659,22 @@ def register_bot_handlers():
         global moderation_config
         
         chat_id = message.chat.id
+        user_id = message.from_user.id
         
-        # Check if user is admin
+        # Check if user is bot admin OR group admin
+        is_bot_admin = user_id in ADMIN_IDS
+        is_group_admin = False
+        
         try:
-            member = await client.get_chat_member(chat_id, message.from_user.id)
-            if member.status not in ["administrator", "creator"]:
-                await message.reply("❌ Only admins can enable moderation!")
-                return
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["administrator", "creator"]:
+                is_group_admin = True
         except:
             pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can enable moderation!")
+            return
         
         if chat_id not in moderation_config:
             moderation_config[chat_id] = load_moderation_config(chat_id)
@@ -2691,15 +2698,22 @@ def register_bot_handlers():
         global moderation_config
         
         chat_id = message.chat.id
+        user_id = message.from_user.id
         
-        # Check if user is admin
+        # Check if user is bot admin OR group admin
+        is_bot_admin = user_id in ADMIN_IDS
+        is_group_admin = False
+        
         try:
-            member = await client.get_chat_member(chat_id, message.from_user.id)
-            if member.status not in ["administrator", "creator"]:
-                await message.reply("❌ Only admins can disable moderation!")
-                return
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["administrator", "creator"]:
+                is_group_admin = True
         except:
             pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can disable moderation!")
+            return
         
         if chat_id not in moderation_config:
             moderation_config[chat_id] = load_moderation_config(chat_id)
@@ -2715,15 +2729,22 @@ def register_bot_handlers():
         global moderation_config
         
         chat_id = message.chat.id
+        user_id = message.from_user.id
         
-        # Check if user is admin
+        # Check if user is bot admin OR group admin
+        is_bot_admin = user_id in ADMIN_IDS
+        is_group_admin = False
+        
         try:
-            member = await client.get_chat_member(chat_id, message.from_user.id)
-            if member.status not in ["administrator", "creator"]:
-                await message.reply("❌ Only admins can change this!")
-                return
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["administrator", "creator"]:
+                is_group_admin = True
         except:
             pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can change this!")
+            return
         
         if chat_id not in moderation_config:
             moderation_config[chat_id] = load_moderation_config(chat_id)
@@ -2742,15 +2763,22 @@ def register_bot_handlers():
         global moderation_config
         
         chat_id = message.chat.id
+        user_id = message.from_user.id
         
-        # Check if user is admin
+        # Check if user is bot admin OR group admin
+        is_bot_admin = user_id in ADMIN_IDS
+        is_group_admin = False
+        
         try:
-            member = await client.get_chat_member(chat_id, message.from_user.id)
-            if member.status not in ["administrator", "creator"]:
-                await message.reply("❌ Only admins can change this!")
-                return
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["administrator", "creator"]:
+                is_group_admin = True
         except:
             pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can change this!")
+            return
         
         if chat_id not in moderation_config:
             moderation_config[chat_id] = load_moderation_config(chat_id)
@@ -2769,15 +2797,22 @@ def register_bot_handlers():
         global moderation_config
         
         chat_id = message.chat.id
+        user_id = message.from_user.id
         
-        # Check if user is admin
+        # Check if user is bot admin OR group admin
+        is_bot_admin = user_id in ADMIN_IDS
+        is_group_admin = False
+        
         try:
-            member = await client.get_chat_member(chat_id, message.from_user.id)
-            if member.status not in ["administrator", "creator"]:
-                await message.reply("❌ Only admins can change this!")
-                return
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["administrator", "creator"]:
+                is_group_admin = True
         except:
             pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can change this!")
+            return
         
         if chat_id not in moderation_config:
             moderation_config[chat_id] = load_moderation_config(chat_id)
@@ -2796,15 +2831,22 @@ def register_bot_handlers():
         global moderation_config
         
         chat_id = message.chat.id
+        user_id = message.from_user.id
         
-        # Check if user is admin
+        # Check if user is bot admin OR group admin
+        is_bot_admin = user_id in ADMIN_IDS
+        is_group_admin = False
+        
         try:
-            member = await client.get_chat_member(chat_id, message.from_user.id)
-            if member.status not in ["administrator", "creator"]:
-                await message.reply("❌ Only admins can change this!")
-                return
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["administrator", "creator"]:
+                is_group_admin = True
         except:
             pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can change this!")
+            return
         
         if chat_id not in moderation_config:
             moderation_config[chat_id] = load_moderation_config(chat_id)
