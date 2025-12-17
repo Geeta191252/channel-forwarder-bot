@@ -3533,6 +3533,88 @@ def register_bot_handlers():
             f"❌ Failed: {auto_approve_stats['failed']}"
         )
     
+    @bot_client.on_message(filters.command("debugjoin"))
+    async def debugjoin_handler(client, message):
+        """Debug join-request approval access for a channel/group"""
+        import re
+        import aiohttp
+
+        try:
+            text = (message.text or "").strip()
+            m = re.match(r"^/debugjoin(?:@\w+)?\s*(.*)$", text)
+            arg = (m.group(1).strip() if m else "")
+
+            if not arg:
+                await message.reply(
+                    "Usage: /debugjoin <channel/group>\n\n"
+                    "Examples:\n"
+                    "• /debugjoin @mychannel\n"
+                    "• /debugjoin -1001234567890"
+                )
+                return
+
+            if not BOT_TOKEN:
+                await message.reply("❌ BOT_TOKEN / TELEGRAM_BOT_TOKEN missing in environment.")
+                return
+
+            base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+            async with aiohttp.ClientSession() as session:
+                async def _get(path: str, params: dict | None = None):
+                    async with session.get(f"{base_url}/{path}", params=params) as resp:
+                        try:
+                            data = await resp.json()
+                        except Exception:
+                            data = {"ok": False, "error_code": resp.status, "description": "Non-JSON response"}
+                        return resp.status, data
+
+                status_code, me = await _get("getMe")
+                if not me.get("ok"):
+                    await message.reply(f"❌ getMe failed ({status_code}): {me.get('description')}")
+                    return
+
+                bot_id = (me.get("result") or {}).get("id")
+
+                # Resolve chat_id
+                chat_id = None
+                if isinstance(arg, str) and arg.lstrip("-").isdigit():
+                    chat_id = int(arg)
+                else:
+                    # getChat needs bot to already be in the chat
+                    _, chat = await _get("getChat", {"chat_id": arg})
+                    if not chat.get("ok"):
+                        await message.reply(
+                            "❌ getChat failed: "
+                            f"{chat.get('description')} (code: {chat.get('error_code')})\n\n"
+                            "Ye usually tab hota hai jab bot chat me add nahi hai / access nahi hai."
+                        )
+                        return
+                    chat_id = (chat.get("result") or {}).get("id")
+
+                # Check bot membership/rights in that chat
+                _, member = await _get("getChatMember", {"chat_id": chat_id, "user_id": bot_id})
+
+                # Check join request visibility
+                _, jr = await _get("getChatJoinRequests", {"chat_id": chat_id, "limit": 1})
+
+                def fmt(x):
+                    if not x or not isinstance(x, dict):
+                        return "(no response)"
+                    if x.get("ok"):
+                        return "ok"
+                    return f"{x.get('description')} (code: {x.get('error_code')})"
+
+                await message.reply(
+                    "🧪 **Join Request Debug**\n\n"
+                    f"Chat: `{arg}` → `{chat_id}`\n"
+                    f"Bot member: {fmt(member)}\n"
+                    f"JoinRequests: {fmt(jr)}\n\n"
+                    "Agar JoinRequests me error aa raha hai to usi error se exact reason pata chalega."
+                )
+
+        except Exception as e:
+            await message.reply(f"❌ debug error: {e}")
+
     @bot_client.on_message(filters.regex(r"^/approveall(?:@\w+)?(?:\s+|-|$)"))
     async def approveall_handler(client, message):
         """Approve all pending join requests for a channel/group using BOT"""
