@@ -1538,12 +1538,70 @@ def register_bot_handlers():
             await callback_query.answer()
             return
         
+        # Helper function to verify user requirements
+        async def verify_user_access(callback_query, client):
+            """Check if user has completed force subscribe and referral requirements"""
+            user_id = callback_query.from_user.id
+            
+            # Admins bypass all checks
+            if is_admin(user_id):
+                return True
+            
+            # Check force subscribe
+            if force_subscribe_channels:
+                is_joined, not_joined = await check_user_joined(client, user_id)
+                if not is_joined:
+                    buttons = []
+                    for channel in not_joined:
+                        link = channel.get("invite_link") or f"https://t.me/{channel['channel_id'].replace('@', '').replace('-', '')}"
+                        buttons.append([InlineKeyboardButton(f"📢 Join {channel['channel_name']}", url=link)])
+                    buttons.append([InlineKeyboardButton("✅ Joined All - Verify", callback_data="check_joined")])
+                    
+                    await safe_edit_message(
+                        callback_query.message,
+                        "🔐 **Join Required!**\n\n"
+                        f"You still need to join **{len(not_joined)}** channel(s):\n\n"
+                        "👇 Click below to join, then click **Verify**:",
+                        reply_markup=InlineKeyboardMarkup(buttons)
+                    )
+                    await callback_query.answer("❌ Please join all channels first!", show_alert=True)
+                    return False
+            
+            # Check referral requirement
+            ref_count = get_referral_count(user_id)
+            if ref_count < REQUIRED_REFERRALS:
+                bot_info = await client.get_me()
+                ref_link = get_referral_link(bot_info.username, user_id)
+                remaining = REQUIRED_REFERRALS - ref_count
+                
+                await safe_edit_message(
+                    callback_query.message,
+                    f"👥 **Referral Required!**\n\n"
+                    f"You need to invite **{REQUIRED_REFERRALS} users** to use this bot.\n\n"
+                    f"✅ Your referrals: **{ref_count}/{REQUIRED_REFERRALS}**\n"
+                    f"❌ Remaining: **{remaining}**\n\n"
+                    f"📤 **Your Referral Link:**\n`{ref_link}`\n\n"
+                    f"Share this link with friends!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Check Again", callback_data="check_referrals")]
+                    ])
+                )
+                await callback_query.answer("❌ Complete referrals first!", show_alert=True)
+                return False
+            
+            return True
+        
         if data == "forward":
             user_id = callback_query.from_user.id
             
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
             # Check if user has accounts connected
             if not user_clients:
-                await callback_query.message.reply("❌ No user accounts connected!")
+                await safe_edit_message(callback_query.message, "❌ No user accounts connected!")
+                await callback_query.answer()
                 return
             
             # Start forward wizard - Set source chat
@@ -1566,16 +1624,23 @@ def register_bot_handlers():
             }
             
             cancel_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")]
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
             ])
             
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 "**( SET SOURCE CHAT )**\n\n"
                 "Forward the last message or last message link of source chat.\n"
                 "/cancel - cancel this process",
                 reply_markup=cancel_keyboard
             )
+            await callback_query.answer()
         elif data == "channel":
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
             # Get user's saved channels
             user_id = callback_query.from_user.id
             user_channels = []
@@ -1588,28 +1653,44 @@ def register_bot_handlers():
             channel_keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("➕ Add Channel ➕", callback_data="add_channel")],
                 [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")],
-                [InlineKeyboardButton("back", callback_data="back_main")]
+                [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
             ])
             
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 f"📢 **My Channels**\n\n"
                 f"you can manage your target chats in here\n\n"
                 f"**Your Channels ({len(user_channels)}):**\n{channels_text}",
                 reply_markup=channel_keyboard
             )
+            await callback_query.answer()
         elif data == "add_channel":
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
             user_id = callback_query.from_user.id
             user_channel_state[user_id] = "waiting_add_channel"
-            await callback_query.message.reply(
+            
+            await safe_edit_message(
+                callback_query.message,
                 "📢 **Add Channel**\n\n"
                 "Send me the channel/chat username or link:\n\n"
                 "Examples:\n"
                 "• @channelname\n"
                 "• https://t.me/channelname\n"
                 "• -1001234567890\n\n"
-                "Just send the message below 👇"
+                "Just send the message below 👇",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="channel")]
+                ])
             )
+            await callback_query.answer()
         elif data == "remove_channel":
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
             user_id = callback_query.from_user.id
             user_channels = []
             if user_channels_col is not None:
@@ -1617,18 +1698,27 @@ def register_bot_handlers():
                 user_channels = [c.get("channel") for c in saved if c.get("channel")]
             
             if not user_channels:
-                await callback_query.message.reply("❌ No channels to remove!")
+                await safe_edit_message(
+                    callback_query.message,
+                    "❌ No channels to remove!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="channel")]
+                    ])
+                )
+                await callback_query.answer()
                 return
             
             # Create buttons for each channel to remove
             buttons = [[InlineKeyboardButton(f"🗑️ {ch}", callback_data=f"del_ch_{ch}")] for ch in user_channels[:10]]
-            buttons.append([InlineKeyboardButton("back", callback_data="channel")])
+            buttons.append([InlineKeyboardButton("🔙 Back", callback_data="channel")])
             
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 "🗑️ **Remove Channel**\n\n"
                 "Select a channel to remove:",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
+            await callback_query.answer()
         elif data.startswith("del_ch_"):
             channel_to_delete = data.replace("del_ch_", "")
             user_id = callback_query.from_user.id
@@ -1636,7 +1726,14 @@ def register_bot_handlers():
             if user_channels_col is not None:
                 user_channels_col.delete_one({"user_id": user_id, "channel": channel_to_delete})
             
-            await callback_query.message.reply(f"✅ Channel `{channel_to_delete}` removed!")
+            await safe_edit_message(
+                callback_query.message,
+                f"✅ Channel `{channel_to_delete}` removed!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="channel")]
+                ])
+            )
+            await callback_query.answer()
         elif data == "back_main":
             # Go back to main menu
             num_accounts = len(user_clients)
@@ -1664,15 +1761,22 @@ def register_bot_handlers():
                 ]
             ])
             
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 f"🚀 **Telegram Forwarder Bot**\n\n"
                 f"👥 Connected accounts: {num_accounts}\n"
                 f"⚡ Expected speed: ~{expected_speed} msg/min\n\n"
                 "Select an option below:",
                 reply_markup=keyboard
             )
+            await callback_query.answer()
         elif data == "moderation":
-            await callback_query.message.reply(
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
+            await safe_edit_message(
+                callback_query.message,
                 "🛡️ **Content Moderation**\n\n"
                 "Add bot as admin in your group, then use:\n\n"
                 "**Commands (in group):**\n"
@@ -1691,10 +1795,19 @@ def register_bot_handlers():
                 "⚠️ **Auto-Ban System:**\n"
                 "• 3 warnings = Automatic BAN\n"
                 "• Warning given on each violation\n"
-                "• Admins are exempt from all filters"
+                "• Admins are exempt from all filters",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
             )
+            await callback_query.answer()
         elif data == "admin":
-            await callback_query.message.reply(
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
+            await safe_edit_message(
+                callback_query.message,
                 "🆘 **Admin Controls - Block @Mentions**\n\n"
                 "Block @username, @bot, @channel mentions in group!\n\n"
                 "**Commands (in group):**\n"
@@ -1702,11 +1815,20 @@ def register_bot_handlers():
                 "/enablemod - Enable moderation first\n"
                 "/modstatus - View all settings\n\n"
                 "⚡ When enabled, any message with @username will be deleted!\n"
-                "👮 Admins are exempt from this filter."
+                "👮 Admins are exempt from this filter.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
             )
+            await callback_query.answer()
         elif data == "join_request":
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
             channels_list = "\n".join([f"• `{ch}`" for ch in auto_approve_channels]) if auto_approve_channels else "None"
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 "📥 **Join Request Auto-Approve**\n\n"
                 "📢 Works for both **Channels & Groups**!\n\n"
                 f"**Status:** {'🟢 Active' if auto_approve_channels else '🔴 Inactive'}\n"
@@ -1718,10 +1840,19 @@ def register_bot_handlers():
                 "/autoapprove <channel/group> - Enable\n"
                 "/stopapprove <channel/group> - Disable\n"
                 "/approveall <channel/group> - Accept all pending\n"
-                "/approvelist - Show all enabled"
+                "/approvelist - Show all enabled",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
             )
+            await callback_query.answer()
         elif data == "file_logo":
-            await callback_query.message.reply(
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
+            await safe_edit_message(
+                callback_query.message,
                 "🖼️ **File Logo / Watermark**\n\n"
                 f"**Status:** {'🟢 Enabled' if logo_config.get('enabled') else '🔴 Disabled'}\n"
                 f"**Logo:** {'✅ Set' if logo_config.get('logo_file_id') else '❌ Not set'}\n"
@@ -1741,10 +1872,15 @@ def register_bot_handlers():
                 "/enablelogo - Enable watermark\n"
                 "/disablelogo - Disable watermark\n"
                 "/removelogo - Remove logo\n"
-                "/logoinfo - Show logo settings"
+                "/logoinfo - Show logo settings",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
             )
+            await callback_query.answer()
         elif data == "help":
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 "❓ **Help Menu**\n\n"
                 "**📤 Forwarding:**\n"
                 "/start - Show main menu\n"
@@ -1760,9 +1896,17 @@ def register_bot_handlers():
                 "/blockforward - Block forwards\n"
                 "/blocklinks - Block links\n"
                 "/blockbadwords - Block bad content\n"
-                "/modstatus - View settings"
+                "/modstatus - View settings",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
             )
+            await callback_query.answer()
         elif data == "filters_menu":
+            # Verify user access
+            if not await verify_user_access(callback_query, client):
+                return
+            
             # Show filter management menu
             user_id = callback_query.from_user.id
             
@@ -1776,7 +1920,8 @@ def register_bot_handlers():
                 [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
             ])
             
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 "🔍 **Forwarding Filters**\n\n"
                 "You can skip specific content types during forwarding:\n\n"
                 "• **🎬 Video Filter** - Skip videos, GIFs, video notes\n"
@@ -1796,6 +1941,7 @@ def register_bot_handlers():
                 "❌ = Content will be forwarded",
                 reply_markup=filter_keyboard
             )
+            await callback_query.answer()
         elif data.startswith("filter_info_"):
             filter_type = data.replace("filter_info_", "")
             
@@ -1814,7 +1960,8 @@ def register_bot_handlers():
                 [InlineKeyboardButton("🔙 Back to Filters", callback_data="filters_menu")]
             ])
             
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 f"**{info[0]}**\n\n"
                 f"📋 **What it filters:**\n{info[1]}\n\n"
                 f"📌 **Examples:**\n{info[2]}\n\n"
@@ -1822,17 +1969,32 @@ def register_bot_handlers():
                 f"Start forwarding → Select this filter → ✅",
                 reply_markup=back_keyboard
             )
+            await callback_query.answer()
         elif data == "cancel_forward":
             user_id = callback_query.from_user.id
             forward_wizard_state.pop(user_id, None)
-            await callback_query.message.reply("❌ Forwarding cancelled!")
+            await safe_edit_message(
+                callback_query.message,
+                "❌ Forwarding cancelled!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
+            )
+            await callback_query.answer()
         elif data.startswith("select_dest_"):
             # User selected a destination channel
             user_id = callback_query.from_user.id
             channel_idx = int(data.replace("select_dest_", ""))
             
             if user_id not in forward_wizard_state:
-                await callback_query.message.reply("❌ Session expired. Please start again.")
+                await safe_edit_message(
+                    callback_query.message,
+                    "❌ Session expired. Please start again.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                    ])
+                )
+                await callback_query.answer()
                 return
             
             # Get user's channels
@@ -1842,7 +2004,14 @@ def register_bot_handlers():
                 user_channels = [c.get("channel") for c in saved if c.get("channel")]
             
             if channel_idx >= len(user_channels):
-                await callback_query.message.reply("❌ Invalid channel!")
+                await safe_edit_message(
+                    callback_query.message,
+                    "❌ Invalid channel!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                    ])
+                )
+                await callback_query.answer()
                 return
             
             dest_channel = user_channels[channel_idx]
@@ -1896,7 +2065,14 @@ def register_bot_handlers():
             filter_name = data.replace("toggle_filter_", "")
             
             if user_id not in forward_wizard_state:
-                await callback_query.message.reply("❌ Session expired. Please start again.")
+                await safe_edit_message(
+                    callback_query.message,
+                    "❌ Session expired. Please start again.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                    ])
+                )
+                await callback_query.answer()
                 return
             
             wizard = forward_wizard_state[user_id]
@@ -1956,12 +2132,20 @@ def register_bot_handlers():
                 )
             except:
                 pass
+            await callback_query.answer()
         elif data == "filters_done":
             # User finished selecting filters, show destination channels
             user_id = callback_query.from_user.id
             
             if user_id not in forward_wizard_state:
-                await callback_query.message.reply("❌ Session expired. Please start again.")
+                await safe_edit_message(
+                    callback_query.message,
+                    "❌ Session expired. Please start again.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                    ])
+                )
+                await callback_query.answer()
                 return
             
             wizard = forward_wizard_state[user_id]
@@ -1974,30 +2158,45 @@ def register_bot_handlers():
                 user_channels = [c.get("channel") for c in saved if c.get("channel")]
             
             if not user_channels:
-                await callback_query.message.reply(
+                await safe_edit_message(
+                    callback_query.message,
                     "❌ No destination channels saved!\n\n"
                     "Please add channels first using:\n"
-                    "/start → 📢 Channel → Add Channel"
+                    "/start → 📢 Channel → Add Channel",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📢 Add Channel", callback_data="add_channel")],
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                    ])
                 )
                 forward_wizard_state.pop(user_id, None)
+                await callback_query.answer()
                 return
             
             # Create buttons for each channel
             buttons = [[InlineKeyboardButton(f"📁 {ch}", callback_data=f"select_dest_{i}")] for i, ch in enumerate(user_channels[:10])]
             buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")])
             
-            await callback_query.message.reply(
+            await safe_edit_message(
+                callback_query.message,
                 f"**( SELECT DESTINATION CHAT )**\n\n"
                 f"Select a channel from your saved channels:",
                 reply_markup=InlineKeyboardMarkup(buttons)
             )
+            await callback_query.answer()
         elif data == "cancel_fwd_active":
             user_id = callback_query.from_user.id
             if user_id in user_forward_progress:
                 user_forward_progress[user_id]["is_active"] = False
                 user_forward_progress[user_id]["status"] = "Cancelled"
             forward_wizard_state.pop(user_id, None)
-            await callback_query.message.reply("🛑 Forwarding cancelled!")
+            await safe_edit_message(
+                callback_query.message,
+                "🛑 Forwarding cancelled!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
+            )
+            await callback_query.answer()
         
         await callback_query.answer()
     
