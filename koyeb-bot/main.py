@@ -3691,244 +3691,155 @@ def register_bot_handlers():
                     except Exception:
                         chat_id = None
 
-                # Otherwise, try resolving via bot API (requires bot to be in the chat)
+                # Otherwise, try resolving via Pyrogram client
                 if chat_id is None:
                     chat = await client.get_chat(channel)
                     chat_id = chat.id
                     chat_title = getattr(chat, "title", None)
                 else:
-                    # Best-effort: try to fetch title, but don't fail if bot can't access
                     try:
                         chat = await client.get_chat(chat_id)
                         chat_title = getattr(chat, "title", None)
                     except Exception:
                         pass
-                
-                # Use raw Bot API to get join requests - more reliable for bots
-                import aiohttp
-                bot_token = BOT_TOKEN
-                if not bot_token:
-                    await status_msg.edit("❌ Bot token missing in environment (BOT_TOKEN / TELEGRAM_BOT_TOKEN).")
-                    return
-                base_url = f"https://api.telegram.org/bot{bot_token}"
-                
-                async with aiohttp.ClientSession() as session:
-                    async def _read_json_or_text(r):
+
+                # METHOD 1: Try Pyrogram's native get_chat_join_requests
+                pyrogram_worked = False
+                try:
+                    await status_msg.edit(f"🔄 Method 1: Pyrogram native...\n{channel}")
+                    async for join_request in client.get_chat_join_requests(chat_id):
                         try:
-                            return await r.json(), None
-                        except Exception:
-                            try:
-                                return None, (await r.text())
-                            except Exception:
-                                return None, None
-
-                    # Quick token sanity-check: invalid token often returns HTTP 404 "Not Found"
-                    async with session.get(f"{base_url}/getMe") as me_resp:
-                        me_json, me_text = await _read_json_or_text(me_resp)
-
-                    if not me_json or not me_json.get("ok"):
-                        details = ""
-                        if me_json and me_json.get("description"):
-                            details = me_json.get("description")
-                        elif me_text:
-                            details = me_text[:200]
-                        await status_msg.edit(
-                            "❌ **Bot token invalid / Not Found**\n\n"
-                            "BOT_TOKEN / TELEGRAM_BOT_TOKEN galat hai ya extra spaces/newline hain.\n"
-                            "Token ko re-check karo, phir restart/deploy karo.\n\n"
-                            f"Debug: {details or 'No details'}"
-                        )
-                        return
-
-                    # Get pending join requests using Bot API
-                    # Telegram Bot API uses offset_date + offset_user_id pagination (not "offset").
-                    bot_info = me_json.get("result") or {}
-                    bot_id = bot_info.get("id")
-                    bot_username = bot_info.get("username")
-                    bot_tag = f"@{bot_username}" if bot_username else f"id:{bot_id}"
-
-                    async def _get(path: str, params: dict | None = None):
-                        async with session.get(f"{base_url}/{path}", params=params) as r:
-                            j, t = await _read_json_or_text(r)
-                            return r.status, j, t
-
-                    # Verify access (but don't hard-fail here; sometimes getChat is flaky while join-requests still work)
-                    chat_access_error = None
-                    _, chat_json, chat_text = await _get("getChat", {"chat_id": chat_id})
-                    if not chat_json or not chat_json.get("ok"):
-                        chat_access_error = ((chat_json or {}).get("description") or (chat_text or "") or "").strip()[:200]
-                    else:
-                        chat_title = (chat_json.get("result") or {}).get("title") or chat_title
-
-                    # Verify bot membership/admin (also non-fatal; we'll show the exact API error if approve fails)
-                    member_error = None
-                    bot_status = None
-                    _, member_json, member_text = await _get("getChatMember", {"chat_id": chat_id, "user_id": bot_id})
-                    if not member_json or not member_json.get("ok"):
-                        member_error = ((member_json or {}).get("description") or (member_text or "") or "").strip()[:200]
-                    else:
-                        bot_status = (((member_json.get("result") or {}).get("status") or "").lower() or None)
-
-                    if bot_status is not None and bot_status not in ["administrator", "creator"]:
-                        await status_msg.edit(
-                            "❌ **Bot needs admin permissions**\n\n"
-                            f"Bot: `{bot_tag}`\n"
-                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
-                            "Bot ko ADMIN banao aur required rights do (Join Requests approve ke liye)."
-                        )
-                        return
-
-                    # Note: if we have access issues, we'll surface them with full details below when calling getChatJoinRequests/approve.
-                    if chat_access_error or member_error:
-                        await status_msg.edit(
-                            "⚠️ **Warning: Access check failed**\n\n"
-                            f"Bot: `{bot_tag}`\n"
-                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
-                            f"getChat: `{chat_access_error or 'ok'}`\n"
-                            f"getChatMember: `{member_error or 'ok'}`\n\n"
-                            "Ab main join requests read karke approve try kar raha hoon…"
-                        )
-
-                    # Now read join requests (pagination with offset_date + offset_user_id)
-                    offset_date = None
-                    offset_user_id = None
-
-                    while True:
-                        params = {"chat_id": chat_id, "limit": 100}
-                        if offset_date is not None:
-                            params["offset_date"] = offset_date
-                        if offset_user_id is not None:
-                            params["offset_user_id"] = offset_user_id
-
-                        async with session.get(f"{base_url}/getChatJoinRequests", params=params) as resp:
-                            data, data_text = await _read_json_or_text(resp)
-                            if not data:
-                                # Often happens when token is invalid and Telegram returns HTML 404
-                                await status_msg.edit(
-                                    "❌ **Error: Not Found**\n\n"
-                                    "Telegram API se JSON response nahi aaya (usually BOT_TOKEN invalid).\n\n"
-                                    f"Debug: {(data_text or '').strip()[:200] or 'No details'}"
-                                )
-                                return
-
-                            if not data.get("ok"):
-                                error_desc = data.get("description", "Unknown error")
-                                error_code = data.get("error_code", resp.status)
-
-                                # IMPORTANT: Telegram returns 404 "Not Found" for unknown methods too.
-                                # If getChat/getChatMember were OK earlier but getChatJoinRequests is 404,
-                                # it means LISTING join requests isn't available (common on some bot-api servers).
-                                if error_code == 404 and "not found" in error_desc.lower():
-                                    # Fallback: approve from locally stored join-request events
-                                    if pending_join_requests_col is not None:
-                                        pending = list(pending_join_requests_col.find({"chat_id": str(chat_id), "approved": False}).limit(500))
-                                        if not pending:
-                                            await status_msg.edit(
-                                                "ℹ️ Is channel me join-requests list API (getChatJoinRequests) available nahi hai, aur abhi DB me koi pending request stored nahi hai.\n\n"
-                                                "Agar users ne request bheji hai to bot ko request event aana chahiye; phir auto-approve/approveall work karega.\n\n"
-                                                "Tip: user ko 'Request to Join' link se dubara request bhejne ko bolo."
-                                            )
-                                            return
-
-                                        # Approve each pending user
-                                        for doc in pending:
-                                            user_id = doc.get("user_id")
-                                            if not user_id:
-                                                continue
-                                            try:
-                                                approve_params = {"chat_id": chat_id, "user_id": user_id}
-                                                async with session.post(f"{base_url}/approveChatJoinRequest", data=approve_params) as approve_resp:
-                                                    approve_data = await approve_resp.json()
-                                                    if approve_data.get("ok"):
-                                                        approved += 1
-                                                        auto_approve_stats["approved"] += 1
-                                                        pending_join_requests_col.update_one(
-                                                            {"chat_id": str(chat_id), "user_id": user_id},
-                                                            {"$set": {"approved": True, "approved_at": datetime.utcnow()}},
-                                                        )
-                                                    else:
-                                                        failed += 1
-                                                        auto_approve_stats["failed"] += 1
-                                            except Exception:
-                                                failed += 1
-                                                auto_approve_stats["failed"] += 1
-
-                                        await status_msg.edit(
-                                            f"✅ Done (fallback mode)\n\nApproved: {approved}\nFailed: {failed}\nChat: {channel} ({chat_id})"
-                                        )
-                                        return
-
-                                    await status_msg.edit(
-                                        "❌ Telegram API me join-requests list method (getChatJoinRequests) available nahi hai, aur DB disabled hai (MONGO_URI missing).\n\n"
-                                        "Is case me /approveall se purane pending requests list karke approve nahi ho sakta. Auto-approve (event-based) hi work karega."
-                                    )
-                                    return
-
-                                # Other errors
-                                if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower() or "forbidden" in error_desc.lower():
-                                    await status_msg.edit(
-                                        f"❌ **Bot needs admin permissions!**\n\n"
-                                        f"{channel} me bot ko ADMIN banao:\n"
-                                        f"• ✅ Invite Users via Link\n"
-                                        f"• ✅ Add Users (Groups)"
-                                    )
-                                    return
-                                if "chat not found" in error_desc.lower() or "bad request" in error_desc.lower():
-                                    await status_msg.edit(
-                                        f"❌ **Chat not found / bot not added**\n\n"
-                                        f"Bot ko {channel} me ADD karo as admin, phir try karo.\n\nDebug: {error_desc} (code: {error_code})"
-                                    )
-                                    return
-                                raise Exception(f"{error_desc} (code: {error_code})")
-
-                            requests = data.get("result") or []
-                            if not requests:
-                                break
-
-                            for req in requests:
-                                user_id = req.get("user", {}).get("id")
-                                if user_id:
-                                    try:
-                                        # Approve using Bot API
-                                        approve_params = {"chat_id": chat_id, "user_id": user_id}
-                                        async with session.post(f"{base_url}/approveChatJoinRequest", data=approve_params) as approve_resp:
-                                            approve_data = await approve_resp.json()
-                                            if approve_data.get("ok"):
-                                                approved += 1
-                                                auto_approve_stats["approved"] += 1
-                                            else:
-                                                failed += 1
-                                                auto_approve_stats["failed"] += 1
-                                        
-                                        # Update status every 50 approvals
-                                        if approved % 50 == 0:
-                                            try:
-                                                await status_msg.edit(f"🔄 Approving...\n✅ Approved: {approved}\n❌ Failed: {failed}")
-                                            except:
-                                                pass
-                                        
-                                        # Small delay to avoid rate limits
-                                        await asyncio.sleep(0.3)
-                                    except Exception as e:
-                                        failed += 1
-                                        auto_approve_stats["failed"] += 1
-                                        print(f"Failed to approve {user_id}: {e}")
+                            await client.approve_chat_join_request(chat_id, join_request.user.id)
+                            approved += 1
+                            auto_approve_stats["approved"] += 1
                             
-                            # Check if there are more requests
-                            if len(requests) < 100:
-                                break
+                            if approved % 20 == 0:
+                                try:
+                                    await status_msg.edit(f"🔄 Approving (Pyrogram)...\n✅ {approved} | ❌ {failed}")
+                                except:
+                                    pass
+                            await asyncio.sleep(0.2)
+                        except Exception as e:
+                            failed += 1
+                            auto_approve_stats["failed"] += 1
+                            print(f"Failed to approve {join_request.user.id}: {e}")
+                    pyrogram_worked = True
+                except Exception as e:
+                    print(f"Pyrogram get_chat_join_requests failed: {e}")
 
-                            # Pagination: continue after the last request returned
-                            last_req = requests[-1]
-                            offset_date = last_req.get("date")
-                            offset_user_id = (last_req.get("user") or {}).get("id")
-                
-                await status_msg.edit(
-                    f"✅ **Approval Complete!**\n\n"
-                    f"📢 Channel: {chat_title or channel}\n"
-                    f"✅ Approved: {approved}\n"
-                    f"❌ Failed: {failed}"
-                )
+                # METHOD 2: If Pyrogram didn't work or found nothing, try raw Bot API
+                if not pyrogram_worked or (approved == 0 and failed == 0):
+                    import aiohttp
+                    bot_token = BOT_TOKEN
+                    if bot_token:
+                        base_url = f"https://api.telegram.org/bot{bot_token}"
+                        try:
+                            await status_msg.edit(f"🔄 Method 2: Bot API...\n{channel}")
+                            async with aiohttp.ClientSession() as session:
+                                offset_date = None
+                                offset_user_id = None
+                                api_worked = False
+
+                                while True:
+                                    params = {"chat_id": chat_id, "limit": 100}
+                                    if offset_date:
+                                        params["offset_date"] = offset_date
+                                    if offset_user_id:
+                                        params["offset_user_id"] = offset_user_id
+
+                                    async with session.get(f"{base_url}/getChatJoinRequests", params=params) as resp:
+                                        data = await resp.json()
+                                        if not data.get("ok"):
+                                            break  # API not available, try fallback
+                                        
+                                        api_worked = True
+                                        requests = data.get("result") or []
+                                        if not requests:
+                                            break
+
+                                        for req in requests:
+                                            uid = req.get("user", {}).get("id")
+                                            if uid:
+                                                try:
+                                                    async with session.post(f"{base_url}/approveChatJoinRequest", data={"chat_id": chat_id, "user_id": uid}) as ar:
+                                                        ad = await ar.json()
+                                                        if ad.get("ok"):
+                                                            approved += 1
+                                                            auto_approve_stats["approved"] += 1
+                                                        else:
+                                                            failed += 1
+                                                    if approved % 20 == 0:
+                                                        try:
+                                                            await status_msg.edit(f"🔄 Approving (API)...\n✅ {approved} | ❌ {failed}")
+                                                        except:
+                                                            pass
+                                                    await asyncio.sleep(0.2)
+                                                except:
+                                                    failed += 1
+
+                                        if len(requests) < 100:
+                                            break
+                                        last_req = requests[-1]
+                                        offset_date = last_req.get("date")
+                                        offset_user_id = (last_req.get("user") or {}).get("id")
+
+                                if not api_worked:
+                                    raise Exception("Bot API getChatJoinRequests not available")
+                        except Exception as e:
+                            print(f"Bot API method failed: {e}")
+
+                # METHOD 3: Fallback - approve from stored pending requests in DB
+                if approved == 0 and failed == 0 and pending_join_requests_col is not None:
+                    try:
+                        await status_msg.edit(f"🔄 Method 3: DB fallback...\n{channel}")
+                        pending = list(pending_join_requests_col.find({"chat_id": str(chat_id), "approved": False}).limit(500))
+                        if pending:
+                            for doc in pending:
+                                uid = doc.get("user_id")
+                                if not uid:
+                                    continue
+                                try:
+                                    await client.approve_chat_join_request(chat_id, uid)
+                                    approved += 1
+                                    auto_approve_stats["approved"] += 1
+                                    pending_join_requests_col.update_one(
+                                        {"chat_id": str(chat_id), "user_id": uid},
+                                        {"$set": {"approved": True, "approved_at": datetime.utcnow()}}
+                                    )
+                                except Exception as e:
+                                    failed += 1
+                                    auto_approve_stats["failed"] += 1
+                                    # Mark as processed even if failed (user may have cancelled)
+                                    pending_join_requests_col.update_one(
+                                        {"chat_id": str(chat_id), "user_id": uid},
+                                        {"$set": {"approved": True, "error": str(e)}}
+                                    )
+                                if approved % 20 == 0:
+                                    try:
+                                        await status_msg.edit(f"🔄 Approving (DB)...\n✅ {approved} | ❌ {failed}")
+                                    except:
+                                        pass
+                                await asyncio.sleep(0.2)
+                    except Exception as e:
+                        print(f"DB fallback failed: {e}")
+
+                # Final result
+                if approved == 0 and failed == 0:
+                    await status_msg.edit(
+                        f"ℹ️ **No pending requests found**\n\n"
+                        f"Channel: {chat_title or channel}\n\n"
+                        "Possible reasons:\n"
+                        "• Koi pending join request nahi hai\n"
+                        "• Channel me 'Request to Join' link nahi hai\n"
+                        "• Bot ko join-request events nahi mil rahe"
+                    )
+                else:
+                    await status_msg.edit(
+                        f"✅ **Approval Complete!**\n\n"
+                        f"📢 Channel: {chat_title or channel}\n"
+                        f"✅ Approved: {approved}\n"
+                        f"❌ Failed: {failed}"
+                    )
             except Exception as e:
                 error_msg = str(e)
                 if "CHAT_ADMIN_REQUIRED" in error_msg or "not enough rights" in error_msg.lower():
