@@ -3513,6 +3513,7 @@ def register_bot_handlers():
     async def approveall_handler(client, message):
         """Approve all pending join requests for a channel/group using BOT"""
         global auto_approve_stats
+        import re
         
         # Check if user is bot admin or group admin
         user_id = message.from_user.id if message.from_user else None
