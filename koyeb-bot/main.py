@@ -3093,7 +3093,7 @@ def register_bot_handlers():
     
     # ============ PRIVATE MESSAGE HANDLER FOR CHANNEL INPUT ============
     
-    @bot_client.on_message(filters.private & ~filters.command(["start", "setconfig", "forward", "stop", "progress", "status", "setlogo", "setlogotext", "logoposition", "logosize", "logoopacity", "enablelogo", "disablelogo", "removelogo", "logoinfo", "autoapprove", "stopapprove", "approvelist", "approveall", "debugjoin", "rawtest", "cancel"]))
+    @bot_client.on_message(filters.private & ~filters.command(["start", "setconfig", "forward", "stop", "progress", "status", "setlogo", "setlogotext", "logoposition", "logosize", "logoopacity", "enablelogo", "disablelogo", "removelogo", "logoinfo", "autoapprove", "stopapprove", "approvelist", "approveall", "debugjoin", "rawtest", "version", "cancel"]))
     async def private_message_handler(client, message):
         """Handle private messages for channel input and forward wizard"""
         user_id = message.from_user.id
@@ -4016,6 +4016,19 @@ def register_bot_handlers():
 
         except Exception as e:
             await message.reply(f"❌ rawtest error: {e}")
+
+    @bot_client.on_message(filters.command("version"))
+    async def version_handler(client, message):
+        """Print running build/version to confirm deployment"""
+        from datetime import datetime
+        try:
+            await message.reply(
+                "✅ Running build is updated.\n"
+                f"Build time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+                "Commands: /version /rawtest /debugjoin"
+            )
+        except Exception as e:
+            await message.reply(f"❌ version error: {e}")
 
 
 # Flask routes for health checks
