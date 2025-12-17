@@ -3594,20 +3594,30 @@ def register_bot_handlers():
                 base_url = f"https://api.telegram.org/bot{bot_token}"
                 
                 async with aiohttp.ClientSession() as session:
-                    # Quick token sanity-check: invalid token often returns "Not Found" (HTTP 404)
-                    try:
-                        async with session.get(f"{base_url}/getMe") as me_resp:
-                            me_data = await me_resp.json()
-                        if not me_data.get("ok"):
-                            await status_msg.edit(
-                                "❌ **Bot token invalid / Not Found**\n\n"
-                                "Please re-check BOT_TOKEN / TELEGRAM_BOT_TOKEN and redeploy."
-                            )
-                            return
-                    except Exception:
+                    async def _read_json_or_text(r):
+                        try:
+                            return await r.json(), None
+                        except Exception:
+                            try:
+                                return None, (await r.text())
+                            except Exception:
+                                return None, None
+
+                    # Quick token sanity-check: invalid token often returns HTTP 404 "Not Found"
+                    async with session.get(f"{base_url}/getMe") as me_resp:
+                        me_json, me_text = await _read_json_or_text(me_resp)
+
+                    if not me_json or not me_json.get("ok"):
+                        details = ""
+                        if me_json and me_json.get("description"):
+                            details = me_json.get("description")
+                        elif me_text:
+                            details = me_text[:200]
                         await status_msg.edit(
-                            "❌ **Bot token check failed**\n\n"
-                            "Token invalid or Telegram API unreachable."
+                            "❌ **Bot token invalid / Not Found**\n\n"
+                            "BOT_TOKEN / TELEGRAM_BOT_TOKEN galat hai ya extra spaces/newline hain.\n"
+                            "Token ko re-check karo, phir restart/deploy karo.\n\n"
+                            f"Debug: {details or 'No details'}"
                         )
                         return
 
@@ -3624,10 +3634,25 @@ def register_bot_handlers():
                             params["offset_user_id"] = offset_user_id
 
                         async with session.get(f"{base_url}/getChatJoinRequests", params=params) as resp:
-                            data = await resp.json()
+                            data, data_text = await _read_json_or_text(resp)
+                            if not data:
+                                # Often happens when token is invalid and Telegram returns HTML 404
+                                await status_msg.edit(
+                                    "❌ **Error: Not Found**\n\n"
+                                    "Telegram API se JSON response nahi aaya (usually BOT_TOKEN invalid).\n\n"
+                                    f"Debug: {(data_text or '').strip()[:200] or 'No details'}"
+                                )
+                                return
 
                             if not data.get("ok"):
                                 error_desc = data.get("description", "Unknown error")
+                                if "not found" in error_desc.lower():
+                                    await status_msg.edit(
+                                        "❌ **Error: Not Found**\n\n"
+                                        "Ye usually **BOT_TOKEN invalid** hone par aata hai.\n"
+                                        "BOT_TOKEN / TELEGRAM_BOT_TOKEN ko re-check karo (no extra spaces)."
+                                    )
+                                    return
                                 if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower():
                                     await status_msg.edit(
                                         f"❌ **Bot needs admin permissions!**\n\n"
