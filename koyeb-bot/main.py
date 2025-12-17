@@ -3561,9 +3561,29 @@ def register_bot_handlers():
             failed = 0
             
             try:
-                # Get chat info using bot client
-                chat = await client.get_chat(channel)
-                chat_id = chat.id
+                # Resolve chat_id
+                chat_id = None
+                chat_title = None
+
+                # If user passed a numeric id (e.g. -100...), use it directly
+                if isinstance(channel, str) and channel.lstrip("-").isdigit():
+                    try:
+                        chat_id = int(channel)
+                    except Exception:
+                        chat_id = None
+
+                # Otherwise, try resolving via bot API (requires bot to be in the chat)
+                if chat_id is None:
+                    chat = await client.get_chat(channel)
+                    chat_id = chat.id
+                    chat_title = getattr(chat, "title", None)
+                else:
+                    # Best-effort: try to fetch title, but don't fail if bot can't access
+                    try:
+                        chat = await client.get_chat(chat_id)
+                        chat_title = getattr(chat, "title", None)
+                    except Exception:
+                        pass
                 
                 # Use raw Bot API to get join requests - more reliable for bots
                 import aiohttp
@@ -3668,7 +3688,7 @@ def register_bot_handlers():
                 
                 await status_msg.edit(
                     f"✅ **Approval Complete!**\n\n"
-                    f"📢 Channel: {chat.title or channel}\n"
+                    f"📢 Channel: {chat_title or channel}\n"
                     f"✅ Approved: {approved}\n"
                     f"❌ Failed: {failed}"
                 )
@@ -3684,6 +3704,18 @@ def register_bot_handlers():
                     await status_msg.edit(f"❌ Error: {e}")
         
         except Exception as e:
+            error_msg = str(e)
+            if "not found" in error_msg.lower():
+                await message.reply(
+                    "❌ **Error: Not Found**\n\n"
+                    "Iska matlab: bot ko is channel/group ka access nahi hai (bot add/admin nahi hai) ya chat id galat hai.\n\n"
+                    "Fix:\n"
+                    "1) Bot ko us channel/group me ADD karo\n"
+                    "2) Bot ko ADMIN banao\n"
+                    "3) Join Requests ON rakho (Approval required)\n"
+                    "4) Phir /approveall -100... dobara chalao"
+                )
+                return
             await message.reply(f"❌ Error: {e}")
     
     # ============ CHAT JOIN REQUEST HANDLER (Auto-approve) ============
