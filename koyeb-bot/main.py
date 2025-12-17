@@ -3747,40 +3747,24 @@ def register_bot_handlers():
                             j, t = await _read_json_or_text(r)
                             return r.status, j, t
 
-                    # Verify the bot can access the target chat (helps when user added a different bot)
+                    # Verify access (but don't hard-fail here; sometimes getChat is flaky while join-requests still work)
+                    chat_access_error = None
                     _, chat_json, chat_text = await _get("getChat", {"chat_id": chat_id})
                     if not chat_json or not chat_json.get("ok"):
-                        desc = (chat_json or {}).get("description") or (chat_text or "")
-                        await status_msg.edit(
-                            "❌ **Chat Not Found / No Access**\n\n"
-                            f"Bot: `{bot_tag}`\n"
-                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
-                            "Is bot ko is chat ka access nahi hai.\n\n"
-                            "**Fix:**\n"
-                            "• Isi bot ko (same token wala) channel me ADD karo\n"
-                            "• Admin banao + Join Requests permission/setting ON rakho\n\n"
-                            f"Debug: {(desc or 'No details').strip()[:160]}"
-                        )
-                        return
+                        chat_access_error = ((chat_json or {}).get("description") or (chat_text or "") or "").strip()[:200]
+                    else:
+                        chat_title = (chat_json.get("result") or {}).get("title") or chat_title
 
-                    chat_title = (chat_json.get("result") or {}).get("title") or chat_title
-
-                    # Verify bot membership + admin status explicitly
+                    # Verify bot membership/admin (also non-fatal; we'll show the exact API error if approve fails)
+                    member_error = None
+                    bot_status = None
                     _, member_json, member_text = await _get("getChatMember", {"chat_id": chat_id, "user_id": bot_id})
                     if not member_json or not member_json.get("ok"):
-                        desc = (member_json or {}).get("description") or (member_text or "")
-                        await status_msg.edit(
-                            "❌ **Bot not in chat / No access**\n\n"
-                            f"Bot: `{bot_tag}`\n"
-                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
-                            "Is bot ko channel me add nahi kiya gaya (ya token kisi aur bot ka hai).\n\n"
-                            "**Fix:** isi bot ko add karke ADMIN banao, phir /approveall try karo.\n\n"
-                            f"Debug: {(desc or 'No details').strip()[:160]}"
-                        )
-                        return
+                        member_error = ((member_json or {}).get("description") or (member_text or "") or "").strip()[:200]
+                    else:
+                        bot_status = (((member_json.get("result") or {}).get("status") or "").lower() or None)
 
-                    bot_status = ((member_json.get("result") or {}).get("status") or "").lower()
-                    if bot_status not in ["administrator", "creator"]:
+                    if bot_status is not None and bot_status not in ["administrator", "creator"]:
                         await status_msg.edit(
                             "❌ **Bot needs admin permissions**\n\n"
                             f"Bot: `{bot_tag}`\n"
@@ -3788,6 +3772,17 @@ def register_bot_handlers():
                             "Bot ko ADMIN banao aur required rights do (Join Requests approve ke liye)."
                         )
                         return
+
+                    # Note: if we have access issues, we'll surface them with full details below when calling getChatJoinRequests/approve.
+                    if chat_access_error or member_error:
+                        await status_msg.edit(
+                            "⚠️ **Warning: Access check failed**\n\n"
+                            f"Bot: `{bot_tag}`\n"
+                            f"Chat: `{channel}` (`{chat_id}`)\n\n"
+                            f"getChat: `{chat_access_error or 'ok'}`\n"
+                            f"getChatMember: `{member_error or 'ok'}`\n\n"
+                            "Ab main join requests read karke approve try kar raha hoon…"
+                        )
 
                     # Now read join requests (pagination with offset_date + offset_user_id)
                     offset_date = None
