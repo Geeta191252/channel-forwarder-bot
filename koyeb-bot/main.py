@@ -897,14 +897,15 @@ def register_bot_handlers():
                 InlineKeyboardButton("📢 Channel", callback_data="channel")
             ],
             [
-                InlineKeyboardButton("🛡️ Moderation", callback_data="moderation"),
-                InlineKeyboardButton("🆘 @Admin", callback_data="admin")
+                InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
+                InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
             ],
             [
-                InlineKeyboardButton("📥 Join Request", callback_data="join_request"),
-                InlineKeyboardButton("📁 File Logo", callback_data="file_logo")
+                InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
+                InlineKeyboardButton("📥 Join Request", callback_data="join_request")
             ],
             [
+                InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
                 InlineKeyboardButton("❓ Help", callback_data="help")
             ]
         ])
@@ -1031,14 +1032,15 @@ def register_bot_handlers():
                     InlineKeyboardButton("📢 Channel", callback_data="channel")
                 ],
                 [
-                    InlineKeyboardButton("🛡️ Moderation", callback_data="moderation"),
-                    InlineKeyboardButton("🆘 @Admin", callback_data="admin")
+                    InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
+                    InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
                 ],
                 [
-                    InlineKeyboardButton("📥 Join Request", callback_data="join_request"),
-                    InlineKeyboardButton("📁 File Logo", callback_data="file_logo")
+                    InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
+                    InlineKeyboardButton("📥 Join Request", callback_data="join_request")
                 ],
                 [
+                    InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
                     InlineKeyboardButton("❓ Help", callback_data="help")
                 ]
             ])
@@ -1140,6 +1142,66 @@ def register_bot_handlers():
                 "/blocklinks - Block links\n"
                 "/blockbadwords - Block bad content\n"
                 "/modstatus - View settings"
+            )
+        elif data == "filters_menu":
+            # Show filter management menu
+            user_id = callback_query.from_user.id
+            
+            filter_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🎬 Video Filter", callback_data="filter_info_video")],
+                [InlineKeyboardButton("🖼️ Photo Filter", callback_data="filter_info_photo")],
+                [InlineKeyboardButton("📁 File Filter", callback_data="filter_info_file")],
+                [InlineKeyboardButton("🎵 Audio Filter", callback_data="filter_info_audio")],
+                [InlineKeyboardButton("🎭 Sticker Filter", callback_data="filter_info_sticker")],
+                [InlineKeyboardButton("📝 Text Filter", callback_data="filter_info_text")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+            ])
+            
+            await callback_query.message.reply(
+                "🔍 **Forwarding Filters**\n\n"
+                "You can skip specific content types during forwarding:\n\n"
+                "• **🎬 Video Filter** - Skip videos, GIFs, video notes\n"
+                "• **🖼️ Photo Filter** - Skip photos/images\n"
+                "• **📁 File Filter** - Skip documents/files\n"
+                "• **🎵 Audio Filter** - Skip audio, voice messages\n"
+                "• **🎭 Sticker Filter** - Skip stickers\n"
+                "• **📝 Text Filter** - Skip text-only messages\n\n"
+                "⚡ **How to use:**\n"
+                "1. Click **📤 Forward** button\n"
+                "2. Set source channel\n"
+                "3. Enter skip number\n"
+                "4. **Select filters** to skip content types\n"
+                "5. Select destination channel\n"
+                "6. Forwarding starts!\n\n"
+                "✅ = Content will be SKIPPED\n"
+                "❌ = Content will be forwarded",
+                reply_markup=filter_keyboard
+            )
+        elif data.startswith("filter_info_"):
+            filter_type = data.replace("filter_info_", "")
+            
+            filter_info = {
+                "video": ("🎬 Video Filter", "Videos, GIFs (animations), Video notes/circles", "Movies, clips, animated content"),
+                "photo": ("🖼️ Photo Filter", "Photos, Images, Pictures", "All image content"),
+                "file": ("📁 File Filter", "Documents, PDFs, ZIPs, any file attachments", "All document types"),
+                "audio": ("🎵 Audio Filter", "Audio files, Voice messages, Music", "MP3, voice notes, audio content"),
+                "sticker": ("🎭 Sticker Filter", "Stickers, Animated stickers", "All sticker types"),
+                "text": ("📝 Text Filter", "Text-only messages (no media attached)", "Plain text messages")
+            }
+            
+            info = filter_info.get(filter_type, ("Unknown", "Unknown", "Unknown"))
+            
+            back_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Filters", callback_data="filters_menu")]
+            ])
+            
+            await callback_query.message.reply(
+                f"**{info[0]}**\n\n"
+                f"📋 **What it filters:**\n{info[1]}\n\n"
+                f"📌 **Examples:**\n{info[2]}\n\n"
+                f"⚡ **To use this filter:**\n"
+                f"Start forwarding → Select this filter → ✅",
+                reply_markup=back_keyboard
             )
         elif data == "cancel_forward":
             user_id = callback_query.from_user.id
