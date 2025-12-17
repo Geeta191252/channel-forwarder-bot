@@ -1089,18 +1089,28 @@ async def init_clients():
     # Initialize user clients for fast forwarding (MTProto)
     if session_strings and API_ID and API_HASH:
         for idx, (name, session_string) in enumerate(session_strings):
-            try:
-                client = Client(
-                    f"user_session_{idx}",
-                    api_id=int(API_ID),
-                    api_hash=API_HASH,
-                    session_string=session_string
-                )
-                await client.start()
-                user_clients.append((name, client))
-                print(f"✅ {name} connected!")
-            except Exception as e:
-                print(f"❌ Failed to start {name}: {e}")
+            client = Client(
+                f"user_session_{idx}",
+                api_id=int(API_ID),
+                api_hash=API_HASH,
+                session_string=session_string
+            )
+
+            # Start with FloodWait handling (avoids crash-loop on restarts)
+            for attempt in range(1, 4):
+                try:
+                    await client.start()
+                    user_clients.append((name, client))
+                    print(f"✅ {name} connected!")
+                    break
+                except FloodWait as e:
+                    wait_s = int(getattr(e, "value", 0) or 0)
+                    wait_s = max(wait_s, 5)
+                    print(f"⏳ FloodWait while starting {name}: waiting {wait_s}s (attempt {attempt}/3)")
+                    await asyncio.sleep(wait_s)
+                except Exception as e:
+                    print(f"❌ Failed to start {name}: {e}")
+                    break
     
     print(f"🚀 Total active accounts: {len(user_clients)}")
     
@@ -1117,9 +1127,22 @@ async def init_clients():
             api_hash=API_HASH,
             bot_token=BOT_TOKEN
         )
-        await bot_client.start()
-        print("🤖 Bot client started")
-        
+
+        # Start with FloodWait handling (Telegram can rate-limit frequent restarts)
+        for attempt in range(1, 6):
+            try:
+                await bot_client.start()
+                print("🤖 Bot client started")
+                break
+            except FloodWait as e:
+                wait_s = int(getattr(e, "value", 0) or 0)
+                wait_s = max(wait_s, 10)
+                print(f"⏳ FloodWait while starting bot: waiting {wait_s}s (attempt {attempt}/5)")
+                await asyncio.sleep(wait_s)
+            except Exception as e:
+                print(f"❌ Failed to start bot client: {e}")
+                raise
+
         # Register handlers
         register_bot_handlers()
 
