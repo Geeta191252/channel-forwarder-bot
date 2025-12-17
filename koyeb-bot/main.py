@@ -246,9 +246,11 @@ def save_config(source_channel, dest_channel):
 
 
 def load_force_subscribe():
-    """Load force subscribe channels from database"""
+    """Load force subscribe channels from database AND environment variables"""
     global force_subscribe_channels
     force_subscribe_channels = []
+    
+    # Load from database first
     if force_sub_col is not None:
         channels = force_sub_col.find({})
         for ch in channels:
@@ -257,6 +259,29 @@ def load_force_subscribe():
                 "channel_name": ch.get("channel_name", "Channel"),
                 "invite_link": ch.get("invite_link", "")
             })
+    
+    # Load from environment variables (FORCE_SUB_1, FORCE_SUB_2, ... up to 50)
+    # Format: FORCE_SUB_1=@channel|Channel Name|https://t.me/channel
+    # OR: FORCE_SUB_1=@channel (name and link auto-generated)
+    for i in range(1, 51):
+        env_var = os.getenv(f"FORCE_SUB_{i}", "")
+        if env_var:
+            parts = env_var.split("|")
+            channel_id = parts[0].strip()
+            channel_name = parts[1].strip() if len(parts) > 1 else channel_id
+            invite_link = parts[2].strip() if len(parts) > 2 else ""
+            
+            # Check if already in list
+            existing = [ch for ch in force_subscribe_channels if ch["channel_id"] == channel_id]
+            if not existing:
+                force_subscribe_channels.append({
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "invite_link": invite_link
+                })
+                print(f"📢 Force sub from env: {channel_name} ({channel_id})")
+    
+    print(f"📢 Total force subscribe channels: {len(force_subscribe_channels)}")
     return force_subscribe_channels
 
 
@@ -281,7 +306,13 @@ def add_force_subscribe(channel_id, channel_name, invite_link):
             "invite_link": invite_link
         })
         return True
-    return False
+    # If no DB, still add to memory
+    force_subscribe_channels.append({
+        "channel_id": str(channel_id),
+        "channel_name": channel_name,
+        "invite_link": invite_link
+    })
+    return True
 
 
 def remove_force_subscribe(channel_id):
@@ -289,9 +320,8 @@ def remove_force_subscribe(channel_id):
     global force_subscribe_channels
     if force_sub_col is not None:
         force_sub_col.delete_one({"channel_id": str(channel_id)})
-        force_subscribe_channels = [ch for ch in force_subscribe_channels if ch["channel_id"] != str(channel_id)]
-        return True
-    return False
+    force_subscribe_channels = [ch for ch in force_subscribe_channels if ch["channel_id"] != str(channel_id)]
+    return True
 
 
 async def check_user_joined(client, user_id):
@@ -306,6 +336,8 @@ async def check_user_joined(client, user_id):
             # Try to get chat member status
             if channel_id.startswith("-"):
                 chat_id = int(channel_id)
+            elif channel_id.startswith("@"):
+                chat_id = channel_id
             else:
                 chat_id = channel_id
             
