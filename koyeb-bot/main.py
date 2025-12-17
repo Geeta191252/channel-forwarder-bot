@@ -30,6 +30,7 @@ config_col = db["bot_config"] if db is not None else None
 autoapprove_col = db["auto_approve"] if db is not None else None
 logo_col = db["logo_config"] if db is not None else None
 moderation_col = db["group_moderation"] if db is not None else None
+warnings_col = db["user_warnings"] if db is not None else None
 
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
@@ -95,7 +96,9 @@ logo_stats = {"watermarked": 0, "failed": 0}
 
 # Content Moderation state
 moderation_config = {}  # {chat_id: {block_forward, block_links, block_badwords, enabled}}
-moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0}
+moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0, "warnings": 0, "bans": 0}
+user_warnings = {}  # {(chat_id, user_id): warning_count}
+MAX_WARNINGS = 3  # Auto-ban after this many warnings
 
 # Bad words list for content filtering (Hindi + English inappropriate/sexual words)
 BAD_WORDS = [
@@ -708,14 +711,17 @@ def register_bot_handlers():
                 "/blockforward - Block forwarded messages\n"
                 "/blocklinks - Block links/URLs/usernames\n"
                 "/blockbadwords - 🔞 Block sex/adult content\n"
-                "/modstatus - View moderation settings\n\n"
+                "/modstatus - View moderation settings\n"
+                "/warnings - Check user warnings\n"
+                "/resetwarnings - Reset user warnings (admin)\n\n"
                 "🔞 **Sex Content Filter:**\n"
                 "Use /blockbadwords to auto-delete:\n"
                 "• Sex messages (sex, porn, xxx, etc.)\n"
-                "• Adult content\n"
-                "• Abusive words (Hindi/English)\n\n"
-                "⚡ Messages will be deleted instantly!\n"
-                "👮 Admins are exempt from all filters."
+                "• Adult content & Abusive words\n\n"
+                "⚠️ **Auto-Ban System:**\n"
+                "• 3 warnings = Automatic BAN\n"
+                "• Warning given on each violation\n"
+                "• Admins are exempt from all filters"
             )
         elif data == "admin":
             await callback_query.message.reply(
@@ -1286,17 +1292,20 @@ def register_bot_handlers():
             f"📊 **Stats:**\n"
             f"📨 Deleted forwards: {moderation_stats['deleted_forward']}\n"
             f"🔗 Deleted links: {moderation_stats['deleted_links']}\n"
-            f"🚫 Deleted bad words: {moderation_stats['deleted_badwords']}"
+            f"🚫 Deleted bad words: {moderation_stats['deleted_badwords']}\n"
+            f"⚠️ Total warnings: {moderation_stats['warnings']}\n"
+            f"🔨 Auto-bans: {moderation_stats['bans']}"
         )
     
     # ============ CONTENT MODERATION MESSAGE FILTER ============
     
-    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "modstatus"]))
+    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "modstatus", "warnings", "resetwarnings"]))
     async def moderation_filter_handler(client, message):
-        """Filter and delete inappropriate messages"""
-        global moderation_stats
+        """Filter and delete inappropriate messages with warning system"""
+        global moderation_stats, user_warnings
         
         chat_id = message.chat.id
+        user_id = message.from_user.id
         
         # Load config if not in memory
         if chat_id not in moderation_config:
@@ -1310,18 +1319,75 @@ def register_bot_handlers():
         
         # Skip if user is admin
         try:
-            member = await client.get_chat_member(chat_id, message.from_user.id)
+            member = await client.get_chat_member(chat_id, user_id)
             if member.status in ["administrator", "creator"]:
                 return
         except:
             pass
+        
+        async def add_warning_and_check_ban(reason):
+            """Add warning to user and ban if exceeded limit"""
+            global user_warnings, moderation_stats
+            
+            key = (chat_id, user_id)
+            
+            # Load from DB if not in memory
+            if key not in user_warnings and warnings_col is not None:
+                saved = warnings_col.find_one({"chat_id": chat_id, "user_id": user_id})
+                user_warnings[key] = saved.get("count", 0) if saved else 0
+            
+            # Increment warning
+            user_warnings[key] = user_warnings.get(key, 0) + 1
+            current_warnings = user_warnings[key]
+            moderation_stats["warnings"] += 1
+            
+            # Save to DB
+            if warnings_col is not None:
+                warnings_col.update_one(
+                    {"chat_id": chat_id, "user_id": user_id},
+                    {"$set": {"count": current_warnings, "last_reason": reason, "updated_at": datetime.utcnow()}},
+                    upsert=True
+                )
+            
+            user_name = message.from_user.first_name
+            
+            # Check if should ban
+            if current_warnings >= MAX_WARNINGS:
+                try:
+                    await client.ban_chat_member(chat_id, user_id)
+                    moderation_stats["bans"] += 1
+                    await client.send_message(
+                        chat_id,
+                        f"🚫 **Auto-Ban:** {user_name}\n"
+                        f"Reason: {MAX_WARNINGS} warnings exceeded\n"
+                        f"Last violation: {reason}"
+                    )
+                    # Reset warnings after ban
+                    user_warnings[key] = 0
+                    if warnings_col is not None:
+                        warnings_col.update_one(
+                            {"chat_id": chat_id, "user_id": user_id},
+                            {"$set": {"count": 0, "banned": True}}
+                        )
+                    print(f"🔨 Auto-banned {user_name} after {MAX_WARNINGS} warnings")
+                except Exception as e:
+                    print(f"Failed to ban user: {e}")
+            else:
+                # Send warning message
+                remaining = MAX_WARNINGS - current_warnings
+                await client.send_message(
+                    chat_id,
+                    f"⚠️ **Warning {current_warnings}/{MAX_WARNINGS}:** {user_name}\n"
+                    f"Reason: {reason}\n"
+                    f"⛔ {remaining} more warning{'s' if remaining > 1 else ''} = Auto-Ban!"
+                )
         
         try:
             # Check for forwarded messages
             if config.get("block_forward") and message.forward_date:
                 await message.delete()
                 moderation_stats["deleted_forward"] += 1
-                print(f"🚫 Deleted forwarded message from {message.from_user.first_name}")
+                await add_warning_and_check_ban("Forwarded message")
                 return
             
             # Get message text
@@ -1331,18 +1397,73 @@ def register_bot_handlers():
             if config.get("block_links") and text and contains_link(text):
                 await message.delete()
                 moderation_stats["deleted_links"] += 1
-                print(f"🚫 Deleted message with link from {message.from_user.first_name}")
+                await add_warning_and_check_ban("Link/URL not allowed")
                 return
             
             # Check for bad words
             if config.get("block_badwords") and text and contains_bad_words(text):
                 await message.delete()
                 moderation_stats["deleted_badwords"] += 1
-                print(f"🚫 Deleted inappropriate message from {message.from_user.first_name}")
+                await add_warning_and_check_ban("Inappropriate/sexual content")
                 return
                 
         except Exception as e:
             print(f"Moderation error: {e}")
+    
+    @bot_client.on_message(filters.command("warnings") & filters.group)
+    async def check_warnings_handler(client, message):
+        """Check warnings for a user"""
+        chat_id = message.chat.id
+        
+        # Check if replying to someone
+        if message.reply_to_message:
+            target_user = message.reply_to_message.from_user
+        else:
+            target_user = message.from_user
+        
+        key = (chat_id, target_user.id)
+        
+        # Load from DB
+        if key not in user_warnings and warnings_col is not None:
+            saved = warnings_col.find_one({"chat_id": chat_id, "user_id": target_user.id})
+            user_warnings[key] = saved.get("count", 0) if saved else 0
+        
+        count = user_warnings.get(key, 0)
+        await message.reply(
+            f"⚠️ **Warnings for {target_user.first_name}:** {count}/{MAX_WARNINGS}\n"
+            f"{'🔴 Next violation = BAN!' if count == MAX_WARNINGS - 1 else ''}"
+        )
+    
+    @bot_client.on_message(filters.command("resetwarnings") & filters.group)
+    async def reset_warnings_handler(client, message):
+        """Reset warnings for a user (admin only)"""
+        chat_id = message.chat.id
+        
+        # Check if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await message.reply("❌ Only admins can reset warnings!")
+                return
+        except:
+            pass
+        
+        if not message.reply_to_message:
+            await message.reply("❌ Reply to a user's message to reset their warnings")
+            return
+        
+        target_user = message.reply_to_message.from_user
+        key = (chat_id, target_user.id)
+        
+        user_warnings[key] = 0
+        if warnings_col is not None:
+            warnings_col.update_one(
+                {"chat_id": chat_id, "user_id": target_user.id},
+                {"$set": {"count": 0}},
+                upsert=True
+            )
+        
+        await message.reply(f"✅ Warnings reset for {target_user.first_name}")
     
     # ============ JOIN REQUEST AUTO-APPROVE HANDLERS ============
     
