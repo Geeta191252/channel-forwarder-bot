@@ -32,6 +32,7 @@ logo_col = db["logo_config"] if db is not None else None
 moderation_col = db["group_moderation"] if db is not None else None
 warnings_col = db["user_warnings"] if db is not None else None
 user_channels_col = db["user_channels"] if db is not None else None
+force_sub_col = db["force_subscribe"] if db is not None else None
 
 # User state for channel input
 user_channel_state = {}  # {user_id: "waiting_add_channel"}
@@ -41,6 +42,9 @@ forward_wizard_state = {}  # {user_id: {"state": "...", "source_channel": "", "s
 
 # Active forwarding progress per user
 user_forward_progress = {}  # {user_id: {progress data...}}
+
+# Force subscribe channels list (loaded from DB)
+force_subscribe_channels = []  # [{"channel_id": "", "channel_name": "", "invite_link": ""}]
 
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
@@ -239,6 +243,80 @@ def save_config(source_channel, dest_channel):
             }},
             upsert=True
         )
+
+
+def load_force_subscribe():
+    """Load force subscribe channels from database"""
+    global force_subscribe_channels
+    force_subscribe_channels = []
+    if force_sub_col is not None:
+        channels = force_sub_col.find({})
+        for ch in channels:
+            force_subscribe_channels.append({
+                "channel_id": ch.get("channel_id"),
+                "channel_name": ch.get("channel_name", "Channel"),
+                "invite_link": ch.get("invite_link", "")
+            })
+    return force_subscribe_channels
+
+
+def add_force_subscribe(channel_id, channel_name, invite_link):
+    """Add a force subscribe channel"""
+    global force_subscribe_channels
+    if force_sub_col is not None:
+        # Check if already exists
+        existing = force_sub_col.find_one({"channel_id": str(channel_id)})
+        if existing:
+            return False
+        
+        force_sub_col.insert_one({
+            "channel_id": str(channel_id),
+            "channel_name": channel_name,
+            "invite_link": invite_link,
+            "added_at": datetime.utcnow()
+        })
+        force_subscribe_channels.append({
+            "channel_id": str(channel_id),
+            "channel_name": channel_name,
+            "invite_link": invite_link
+        })
+        return True
+    return False
+
+
+def remove_force_subscribe(channel_id):
+    """Remove a force subscribe channel"""
+    global force_subscribe_channels
+    if force_sub_col is not None:
+        force_sub_col.delete_one({"channel_id": str(channel_id)})
+        force_subscribe_channels = [ch for ch in force_subscribe_channels if ch["channel_id"] != str(channel_id)]
+        return True
+    return False
+
+
+async def check_user_joined(client, user_id):
+    """Check if user has joined all force subscribe channels"""
+    if not force_subscribe_channels:
+        return True, []
+    
+    not_joined = []
+    for channel in force_subscribe_channels:
+        try:
+            channel_id = channel["channel_id"]
+            # Try to get chat member status
+            if channel_id.startswith("-"):
+                chat_id = int(channel_id)
+            else:
+                chat_id = channel_id
+            
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in ["left", "kicked", "banned"]:
+                not_joined.append(channel)
+        except Exception as e:
+            # If we can't check, assume not joined
+            not_joined.append(channel)
+    
+    return len(not_joined) == 0, not_joined
 
 
 def save_progress():
@@ -885,8 +963,36 @@ async def init_clients():
 def register_bot_handlers():
     """Register bot command handlers"""
     
+    # Load force subscribe channels on startup
+    load_force_subscribe()
+    
     @bot_client.on_message(filters.command("start"))
     async def start_handler(client, message):
+        user_id = message.from_user.id
+        
+        # Check force subscribe
+        if force_subscribe_channels:
+            is_joined, not_joined = await check_user_joined(client, user_id)
+            
+            if not is_joined:
+                # Show force subscribe message
+                buttons = []
+                for idx, channel in enumerate(not_joined):
+                    link = channel.get("invite_link") or f"https://t.me/{channel['channel_id'].replace('@', '')}"
+                    buttons.append([InlineKeyboardButton(f"📢 Join {channel['channel_name']}", url=link)])
+                
+                buttons.append([InlineKeyboardButton("✅ Joined All - Verify", callback_data="check_joined")])
+                
+                await message.reply(
+                    "🔐 **Join Required!**\n\n"
+                    "To use this bot, you must join the following channels/groups:\n\n"
+                    f"📢 **{len(not_joined)} channel(s) remaining**\n\n"
+                    "👇 Click below to join, then click **Verify**:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+                return
+        
+        # User has joined all or no force subscribe
         num_accounts = len(user_clients)
         expected_speed = num_accounts * 30 if num_accounts else 0
         
@@ -918,9 +1024,159 @@ def register_bot_handlers():
             reply_markup=keyboard
         )
     
+    # ============ FORCE SUBSCRIBE MANAGEMENT COMMANDS ============
+    
+    @bot_client.on_message(filters.command("addforcesub"))
+    async def add_forcesub_handler(client, message):
+        """Add a force subscribe channel/group"""
+        try:
+            parts = message.text.split(maxsplit=2)
+            if len(parts) < 2:
+                await message.reply(
+                    "**Usage:** /addforcesub <channel_id/username> [invite_link]\n\n"
+                    "**Examples:**\n"
+                    "• /addforcesub @mychannel https://t.me/mychannel\n"
+                    "• /addforcesub -1001234567890 https://t.me/+abcdef\n"
+                    "• /addforcesub @mygroup"
+                )
+                return
+            
+            channel_id = parts[1]
+            invite_link = parts[2] if len(parts) > 2 else ""
+            
+            # Try to get channel info
+            try:
+                chat = await client.get_chat(channel_id)
+                channel_name = chat.title or channel_id
+                actual_id = str(chat.id)
+            except:
+                channel_name = channel_id
+                actual_id = channel_id
+            
+            if add_force_subscribe(actual_id, channel_name, invite_link):
+                await message.reply(
+                    f"✅ **Force Subscribe Added!**\n\n"
+                    f"📢 Channel: {channel_name}\n"
+                    f"🆔 ID: `{actual_id}`\n"
+                    f"🔗 Link: {invite_link or 'Auto-generated'}\n\n"
+                    f"Total force subs: {len(force_subscribe_channels)}"
+                )
+            else:
+                await message.reply("⚠️ This channel is already in force subscribe list!")
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
+    
+    @bot_client.on_message(filters.command("removeforcesub"))
+    async def remove_forcesub_handler(client, message):
+        """Remove a force subscribe channel/group"""
+        try:
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.reply(
+                    "**Usage:** /removeforcesub <channel_id/username>\n\n"
+                    "Use /forcelist to see all force subscribe channels"
+                )
+                return
+            
+            channel_id = parts[1]
+            
+            # Try to find by ID or username
+            found = False
+            for ch in force_subscribe_channels:
+                if ch["channel_id"] == channel_id or ch["channel_id"] == channel_id.replace("@", ""):
+                    remove_force_subscribe(ch["channel_id"])
+                    found = True
+                    await message.reply(f"✅ Removed `{ch['channel_name']}` from force subscribe!")
+                    break
+            
+            if not found:
+                await message.reply("❌ Channel not found in force subscribe list!")
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
+    
+    @bot_client.on_message(filters.command("forcelist"))
+    async def forcelist_handler(client, message):
+        """List all force subscribe channels"""
+        if not force_subscribe_channels:
+            await message.reply(
+                "📢 **No Force Subscribe Channels**\n\n"
+                "Use /addforcesub to add channels/groups"
+            )
+            return
+        
+        channels_text = ""
+        for idx, ch in enumerate(force_subscribe_channels, 1):
+            channels_text += f"{idx}. **{ch['channel_name']}**\n"
+            channels_text += f"   🆔 `{ch['channel_id']}`\n"
+            channels_text += f"   🔗 {ch['invite_link'] or 'No link'}\n\n"
+        
+        await message.reply(
+            f"📢 **Force Subscribe Channels ({len(force_subscribe_channels)})**\n\n"
+            f"{channels_text}"
+            f"**Commands:**\n"
+            f"/addforcesub - Add channel\n"
+            f"/removeforcesub - Remove channel"
+        )
+    
     @bot_client.on_callback_query()
     async def callback_handler(client, callback_query):
         data = callback_query.data
+        
+        # Handle force subscribe verification
+        if data == "check_joined":
+            user_id = callback_query.from_user.id
+            is_joined, not_joined = await check_user_joined(client, user_id)
+            
+            if is_joined:
+                # User has joined all channels, show main menu
+                num_accounts = len(user_clients)
+                expected_speed = num_accounts * 30 if num_accounts else 0
+                
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📤 Forward", callback_data="forward"),
+                        InlineKeyboardButton("📢 Channel", callback_data="channel")
+                    ],
+                    [
+                        InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
+                        InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
+                    ],
+                    [
+                        InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
+                        InlineKeyboardButton("📥 Join Request", callback_data="join_request")
+                    ],
+                    [
+                        InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
+                        InlineKeyboardButton("❓ Help", callback_data="help")
+                    ]
+                ])
+                
+                await callback_query.message.edit_text(
+                    f"✅ **Verification Successful!**\n\n"
+                    f"🚀 **Telegram Forwarder Bot**\n\n"
+                    f"👥 Active accounts: {num_accounts}\n"
+                    f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                    f"Select an option below:",
+                    reply_markup=keyboard
+                )
+            else:
+                # Still not joined
+                buttons = []
+                for channel in not_joined:
+                    link = channel.get("invite_link") or f"https://t.me/{channel['channel_id'].replace('@', '').replace('-', '')}"
+                    buttons.append([InlineKeyboardButton(f"📢 Join {channel['channel_name']}", url=link)])
+                
+                buttons.append([InlineKeyboardButton("✅ Joined All - Verify", callback_data="check_joined")])
+                
+                await callback_query.message.edit_text(
+                    "❌ **Not Joined Yet!**\n\n"
+                    f"You still need to join **{len(not_joined)}** channel(s):\n\n"
+                    "👇 Click below to join, then click **Verify** again:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+            
+            await callback_query.answer()
+            return
         
         if data == "forward":
             user_id = callback_query.from_user.id
