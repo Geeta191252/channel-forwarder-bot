@@ -3508,12 +3508,20 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("approveall"))
     async def approveall_handler(client, message):
-        """Approve all pending join requests for a channel/group"""
+        """Approve all pending join requests for a channel/group using BOT"""
         global auto_approve_stats
         
-        if not user_clients:
-            await message.reply("❌ No user accounts connected!")
-            return
+        # Check if user is bot admin or group admin
+        user_id = message.from_user.id if message.from_user else None
+        if user_id not in BOT_ADMINS:
+            if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+                member = await client.get_chat_member(message.chat.id, user_id)
+                if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                    await message.reply("❌ Only admins can use this command!")
+                    return
+            else:
+                await message.reply("❌ Only bot admins can use this command!")
+                return
         
         try:
             parts = message.text.split()
@@ -3523,35 +3531,42 @@ def register_bot_handlers():
                     "Examples:\n"
                     "• /approveall @mychannel\n"
                     "• /approveall @mygroup\n"
-                    "• /approveall -1001234567890"
+                    "• /approveall -1001234567890\n\n"
+                    "⚠️ Bot must be admin with 'Add Members' permission!"
                 )
                 return
             
             channel = parts[1]
-            user_client = user_clients[0][1]  # Use first user client
             
-            await message.reply(f"🔄 Approving all pending requests for {channel}...")
+            status_msg = await message.reply(f"🔄 Approving all pending requests for {channel}...\n⏳ Please wait...")
             
             approved = 0
             failed = 0
             
             try:
-                # Get chat to get chat_id
-                chat = await user_client.get_chat(channel)
+                # Get chat info using bot client
+                chat = await client.get_chat(channel)
                 
-                # Iterate through pending join requests
-                async for request in user_client.get_chat_join_requests(chat.id):
+                # Iterate through pending join requests using BOT client
+                async for request in client.get_chat_join_requests(chat.id):
                     try:
-                        await user_client.approve_chat_join_request(chat.id, request.user.id)
+                        await client.approve_chat_join_request(chat.id, request.user.id)
                         approved += 1
                         auto_approve_stats["approved"] += 1
                         
+                        # Update status every 50 approvals
+                        if approved % 50 == 0:
+                            try:
+                                await status_msg.edit(f"🔄 Approving...\n✅ Approved: {approved}\n❌ Failed: {failed}")
+                            except:
+                                pass
+                        
                         # Small delay to avoid rate limits
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.3)
                     except FloodWait as e:
                         await asyncio.sleep(e.value)
                         try:
-                            await user_client.approve_chat_join_request(chat.id, request.user.id)
+                            await client.approve_chat_join_request(chat.id, request.user.id)
                             approved += 1
                             auto_approve_stats["approved"] += 1
                         except:
@@ -3562,14 +3577,22 @@ def register_bot_handlers():
                         auto_approve_stats["failed"] += 1
                         print(f"Failed to approve {request.user.id}: {e}")
                 
-                await message.reply(
+                await status_msg.edit(
                     f"✅ **Approval Complete!**\n\n"
-                    f"Channel: {channel}\n"
+                    f"📢 Channel: {chat.title or channel}\n"
                     f"✅ Approved: {approved}\n"
                     f"❌ Failed: {failed}"
                 )
             except Exception as e:
-                await message.reply(f"❌ Error accessing channel: {e}")
+                error_msg = str(e)
+                if "CHAT_ADMIN_REQUIRED" in error_msg:
+                    await status_msg.edit(
+                        f"❌ **Bot needs admin permissions!**\n\n"
+                        f"Make the bot admin in {channel} with:\n"
+                        f"• ✅ Add Members / Invite Users via Link"
+                    )
+                else:
+                    await status_msg.edit(f"❌ Error: {e}")
         
         except Exception as e:
             await message.reply(f"❌ Error: {e}")
