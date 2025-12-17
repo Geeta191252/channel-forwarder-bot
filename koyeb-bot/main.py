@@ -30,6 +30,7 @@ progress_col = db["forwarding_progress"] if db is not None else None
 forwarded_col = db["forwarded_messages"] if db is not None else None
 config_col = db["bot_config"] if db is not None else None
 autoapprove_col = db["auto_approve"] if db is not None else None
+pending_join_requests_col = db["pending_join_requests"] if db is not None else None
 logo_col = db["logo_config"] if db is not None else None
 moderation_col = db["group_moderation"] if db is not None else None
 warnings_col = db["user_warnings"] if db is not None else None
@@ -3814,19 +3815,56 @@ def register_bot_handlers():
                                 error_desc = data.get("description", "Unknown error")
                                 error_code = data.get("error_code", resp.status)
 
-                                # 404 Not Found = bot not admin OR no access to chat
-                                if error_code == 404 or "not found" in error_desc.lower():
+                                # IMPORTANT: Telegram returns 404 "Not Found" for unknown methods too.
+                                # If getChat/getChatMember were OK earlier but getChatJoinRequests is 404,
+                                # it means LISTING join requests isn't available (common on some bot-api servers).
+                                if error_code == 404 and "not found" in error_desc.lower():
+                                    # Fallback: approve from locally stored join-request events
+                                    if pending_join_requests_col is not None:
+                                        pending = list(pending_join_requests_col.find({"chat_id": str(chat_id), "approved": False}).limit(500))
+                                        if not pending:
+                                            await status_msg.edit(
+                                                "ℹ️ Is channel me join-requests list API (getChatJoinRequests) available nahi hai, aur abhi DB me koi pending request stored nahi hai.\n\n"
+                                                "Agar users ne request bheji hai to bot ko request event aana chahiye; phir auto-approve/approveall work karega.\n\n"
+                                                "Tip: user ko 'Request to Join' link se dubara request bhejne ko bolo."
+                                            )
+                                            return
+
+                                        # Approve each pending user
+                                        for doc in pending:
+                                            user_id = doc.get("user_id")
+                                            if not user_id:
+                                                continue
+                                            try:
+                                                approve_params = {"chat_id": chat_id, "user_id": user_id}
+                                                async with session.post(f"{base_url}/approveChatJoinRequest", data=approve_params) as approve_resp:
+                                                    approve_data = await approve_resp.json()
+                                                    if approve_data.get("ok"):
+                                                        approved += 1
+                                                        auto_approve_stats["approved"] += 1
+                                                        pending_join_requests_col.update_one(
+                                                            {"chat_id": str(chat_id), "user_id": user_id},
+                                                            {"$set": {"approved": True, "approved_at": datetime.utcnow()}},
+                                                        )
+                                                    else:
+                                                        failed += 1
+                                                        auto_approve_stats["failed"] += 1
+                                            except Exception:
+                                                failed += 1
+                                                auto_approve_stats["failed"] += 1
+
+                                        await status_msg.edit(
+                                            f"✅ Done (fallback mode)\n\nApproved: {approved}\nFailed: {failed}\nChat: {channel} ({chat_id})"
+                                        )
+                                        return
+
                                     await status_msg.edit(
-                                        "❌ **Error: Chat Not Found / No Access**\n\n"
-                                        f"Bot: `{bot_tag}`\n"
-                                        f"Chat: `{channel}` (`{chat_id}`)\n\n"
-                                        "Iska matlab: bot ko us channel/group me access nahi hai (ya token kisi aur bot ka hai).\n\n"
-                                        "**Fix:**\n"
-                                        "• Isi bot ko ADD karo\n"
-                                        "• ADMIN banao\n"
-                                        "• Phir /approveall dobara try karo"
+                                        "❌ Telegram API me join-requests list method (getChatJoinRequests) available nahi hai, aur DB disabled hai (MONGO_URI missing).\n\n"
+                                        "Is case me /approveall se purane pending requests list karke approve nahi ho sakta. Auto-approve (event-based) hi work karega."
                                     )
                                     return
+
+                                # Other errors
                                 if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower() or "forbidden" in error_desc.lower():
                                     await status_msg.edit(
                                         f"❌ **Bot needs admin permissions!**\n\n"
@@ -3838,7 +3876,7 @@ def register_bot_handlers():
                                 if "chat not found" in error_desc.lower() or "bad request" in error_desc.lower():
                                     await status_msg.edit(
                                         f"❌ **Chat not found / bot not added**\n\n"
-                                        f"Bot ko {channel} me ADD karo as admin, phir try karo."
+                                        f"Bot ko {channel} me ADD karo as admin, phir try karo.\n\nDebug: {error_desc} (code: {error_code})"
                                     )
                                     return
                                 raise Exception(f"{error_desc} (code: {error_code})")
@@ -3938,6 +3976,23 @@ def register_bot_handlers():
             return
         
         try:
+            # Save request so /approveall can work even if Telegram doesn't allow listing join requests
+            if pending_join_requests_col is not None:
+                pending_join_requests_col.update_one(
+                    {"chat_id": str(chat_join_request.chat.id), "user_id": chat_join_request.from_user.id},
+                    {
+                        "$set": {
+                            "chat_id": str(chat_join_request.chat.id),
+                            "chat_username": chat_join_request.chat.username,
+                            "user_id": chat_join_request.from_user.id,
+                            "user_name": chat_join_request.from_user.first_name,
+                            "requested_at": datetime.utcnow(),
+                            "approved": False,
+                        }
+                    },
+                    upsert=True,
+                )
+
             # Use user client if available, otherwise bot client
             if user_clients:
                 user_client = user_clients[0][1]
@@ -3950,7 +4005,13 @@ def register_bot_handlers():
                     chat_join_request.chat.id,
                     chat_join_request.from_user.id
                 )
-            
+
+            if pending_join_requests_col is not None:
+                pending_join_requests_col.update_one(
+                    {"chat_id": str(chat_join_request.chat.id), "user_id": chat_join_request.from_user.id},
+                    {"$set": {"approved": True, "approved_at": datetime.utcnow()}},
+                )
+
             auto_approve_stats["approved"] += 1
             print(f"✅ Auto-approved: {chat_join_request.from_user.first_name} for {chat_username}")
         
