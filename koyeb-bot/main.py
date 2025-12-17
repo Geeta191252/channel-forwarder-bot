@@ -3574,6 +3574,23 @@ def register_bot_handlers():
                 base_url = f"https://api.telegram.org/bot{bot_token}"
                 
                 async with aiohttp.ClientSession() as session:
+                    # Quick token sanity-check: invalid token often returns "Not Found" (HTTP 404)
+                    try:
+                        async with session.get(f"{base_url}/getMe") as me_resp:
+                            me_data = await me_resp.json()
+                        if not me_data.get("ok"):
+                            await status_msg.edit(
+                                "❌ **Bot token invalid / Not Found**\n\n"
+                                "Please re-check BOT_TOKEN / TELEGRAM_BOT_TOKEN and redeploy."
+                            )
+                            return
+                    except Exception:
+                        await status_msg.edit(
+                            "❌ **Bot token check failed**\n\n"
+                            "Token invalid or Telegram API unreachable."
+                        )
+                        return
+
                     # Get pending join requests using Bot API
                     # Telegram Bot API uses offset_date + offset_user_id pagination (not "offset").
                     offset_date = None
