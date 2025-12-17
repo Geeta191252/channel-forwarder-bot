@@ -1188,13 +1188,21 @@ def register_bot_handlers():
             ]
         ])
         
-        await message.reply(
-            f"🚀 **Telegram Forwarder Bot (Multi-Account MTProto)**\n\n"
-            f"👥 Active accounts: {num_accounts}\n"
-            f"⚡ Expected speed: ~{expected_speed}/min\n\n"
-            f"Select an option below or use commands:",
-            reply_markup=keyboard
-        )
+        # Only show account info to admins
+        if message.from_user.id in ADMIN_IDS:
+            msg_text = (
+                f"🚀 **Telegram Forwarder Bot (Multi-Account MTProto)**\n\n"
+                f"👥 Active accounts: {num_accounts}\n"
+                f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                f"Select an option below or use commands:"
+            )
+        else:
+            msg_text = (
+                f"🚀 **Telegram Forwarder Bot**\n\n"
+                f"Select an option below or use commands:"
+            )
+        
+        await message.reply(msg_text, reply_markup=keyboard)
     
     # ============ FORCE SUBSCRIBE MANAGEMENT COMMANDS ============
     
@@ -1327,13 +1335,25 @@ def register_bot_handlers():
                         ]
                     ])
                     
+                    # Only show account info to admins
+                    if user_id in ADMIN_IDS:
+                        msg_text = (
+                            f"✅ **Verification Successful!**\n\n"
+                            f"🚀 **Telegram Forwarder Bot**\n\n"
+                            f"👥 Active accounts: {num_accounts}\n"
+                            f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                            f"Select an option below:"
+                        )
+                    else:
+                        msg_text = (
+                            f"✅ **Verification Successful!**\n\n"
+                            f"🚀 **Telegram Forwarder Bot**\n\n"
+                            f"Select an option below:"
+                        )
+                    
                     await safe_edit_message(
                         callback_query.message,
-                        f"✅ **Verification Successful!**\n\n"
-                        f"🚀 **Telegram Forwarder Bot**\n\n"
-                        f"👥 Active accounts: {num_accounts}\n"
-                        f"⚡ Expected speed: ~{expected_speed}/min\n\n"
-                        f"Select an option below:",
+                        msg_text,
                         reply_markup=keyboard
                     )
                     await callback_query.answer()
@@ -1388,13 +1408,25 @@ def register_bot_handlers():
                     ]
                 ])
                 
+                # Only show account info to admins
+                if user_id in ADMIN_IDS:
+                    msg_text = (
+                        f"✅ **Verification Successful!**\n\n"
+                        f"🚀 **Telegram Forwarder Bot**\n\n"
+                        f"👥 Active accounts: {num_accounts}\n"
+                        f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                        f"Select an option below:"
+                    )
+                else:
+                    msg_text = (
+                        f"✅ **Verification Successful!**\n\n"
+                        f"🚀 **Telegram Forwarder Bot**\n\n"
+                        f"Select an option below:"
+                    )
+                
                 await safe_edit_message(
                     callback_query.message,
-                    f"✅ **Verification Successful!**\n\n"
-                    f"🚀 **Telegram Forwarder Bot**\n\n"
-                    f"👥 Active accounts: {num_accounts}\n"
-                    f"⚡ Expected speed: ~{expected_speed}/min\n\n"
-                    f"Select an option below:",
+                    msg_text,
                     reply_markup=keyboard
                 )
             else:
@@ -1488,14 +1520,14 @@ def register_bot_handlers():
                     ]
                 ])
                 
+                # Only show account info to admins (referral complete users are not admins)
                 await safe_edit_message(
                     callback_query.message,
                     f"✅ **Referral Complete!**\n\n"
                     f"🚀 **Telegram Forwarder Bot**\n\n"
-                    f"👥 Active accounts: {num_accounts}\n"
-                    f"⚡ Expected speed: ~{expected_speed}/min\n\n"
                     f"Select an option below:",
                     reply_markup=keyboard
+                )
                 )
             else:
                 bot_info = await client.get_me()
@@ -1761,12 +1793,24 @@ def register_bot_handlers():
                 ]
             ])
             
+            # Only show account info to admins
+            user_id = callback_query.from_user.id
+            if user_id in ADMIN_IDS:
+                msg_text = (
+                    f"🚀 **Telegram Forwarder Bot**\n\n"
+                    f"👥 Connected accounts: {num_accounts}\n"
+                    f"⚡ Expected speed: ~{expected_speed} msg/min\n\n"
+                    "Select an option below:"
+                )
+            else:
+                msg_text = (
+                    f"🚀 **Telegram Forwarder Bot**\n\n"
+                    "Select an option below:"
+                )
+            
             await safe_edit_message(
                 callback_query.message,
-                f"🚀 **Telegram Forwarder Bot**\n\n"
-                f"👥 Connected accounts: {num_accounts}\n"
-                f"⚡ Expected speed: ~{expected_speed} msg/min\n\n"
-                "Select an option below:",
+                msg_text,
                 reply_markup=keyboard
             )
             await callback_query.answer()
@@ -2202,6 +2246,11 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("accounts"))
     async def accounts_handler(client, message):
+        # Admin only command
+        if message.from_user.id not in ADMIN_IDS:
+            await message.reply("❌ This command is only for admins!")
+            return
+        
         if not user_clients:
             await message.reply("❌ No accounts connected!")
             return
@@ -2328,17 +2377,28 @@ def register_bot_handlers():
         done = current_progress["success_count"] + current_progress["failed_count"] + current_progress["skipped_count"]
         pct = round((done / total * 100), 1) if total > 0 else 0
         
-        await message.reply(
-            f"📊 **Progress**\n\n"
-            f"✅ Success: {current_progress['success_count']}\n"
-            f"❌ Failed: {current_progress['failed_count']}\n"
-            f"⏭️ Skipped: {current_progress['skipped_count']}\n"
-            f"📈 Total: {done}/{total} ({pct}%)\n"
-            f"⚡ Speed: {current_progress['speed']}/min\n"
-            f"👥 Accounts: {current_progress.get('active_accounts', 1)}\n"
-            f"🔄 Active: {'Yes' if current_progress['is_active'] else 'No'}\n"
-            f"⚠️ Rate limits: {current_progress['rate_limit_hits']}"
-        )
+        # Show account info only to admins
+        if message.from_user.id in ADMIN_IDS:
+            await message.reply(
+                f"📊 **Progress**\n\n"
+                f"✅ Success: {current_progress['success_count']}\n"
+                f"❌ Failed: {current_progress['failed_count']}\n"
+                f"⏭️ Skipped: {current_progress['skipped_count']}\n"
+                f"📈 Total: {done}/{total} ({pct}%)\n"
+                f"⚡ Speed: {current_progress['speed']}/min\n"
+                f"👥 Accounts: {current_progress.get('active_accounts', 1)}\n"
+                f"🔄 Active: {'Yes' if current_progress['is_active'] else 'No'}\n"
+                f"⚠️ Rate limits: {current_progress['rate_limit_hits']}"
+            )
+        else:
+            await message.reply(
+                f"📊 **Progress**\n\n"
+                f"✅ Success: {current_progress['success_count']}\n"
+                f"❌ Failed: {current_progress['failed_count']}\n"
+                f"⏭️ Skipped: {current_progress['skipped_count']}\n"
+                f"📈 Total: {done}/{total} ({pct}%)\n"
+                f"🔄 Active: {'Yes' if current_progress['is_active'] else 'No'}"
+            )
     
     @bot_client.on_message(filters.command("status"))
     async def status_handler(client, message):
@@ -2346,16 +2406,27 @@ def register_bot_handlers():
         num_accounts = len(user_clients)
         expected_speed = num_accounts * 30 if num_accounts else 0
         
-        await message.reply(
-            f"📡 **Status**\n\n"
-            f"Source: {config.get('source_channel', 'Not set')}\n"
-            f"Dest: {config.get('dest_channel', 'Not set')}\n"
-            f"👥 Connected accounts: {num_accounts}\n"
-            f"⚡ Expected speed: ~{expected_speed}/min\n"
-            f"Forwarding: {'🟢 Active' if is_forwarding else '⚪ Idle'}\n"
-            f"📥 Auto-approve: {len(auto_approve_channels)} channels\n"
-            f"🖼️ Watermark: {'🟢 On' if logo_config.get('enabled') else '⚪ Off'}"
-        )
+        # Show account info only to admins
+        if message.from_user.id in ADMIN_IDS:
+            await message.reply(
+                f"📡 **Status**\n\n"
+                f"Source: {config.get('source_channel', 'Not set')}\n"
+                f"Dest: {config.get('dest_channel', 'Not set')}\n"
+                f"👥 Connected accounts: {num_accounts}\n"
+                f"⚡ Expected speed: ~{expected_speed}/min\n"
+                f"Forwarding: {'🟢 Active' if is_forwarding else '⚪ Idle'}\n"
+                f"📥 Auto-approve: {len(auto_approve_channels)} channels\n"
+                f"🖼️ Watermark: {'🟢 On' if logo_config.get('enabled') else '⚪ Off'}"
+            )
+        else:
+            await message.reply(
+                f"📡 **Status**\n\n"
+                f"Source: {config.get('source_channel', 'Not set')}\n"
+                f"Dest: {config.get('dest_channel', 'Not set')}\n"
+                f"Forwarding: {'🟢 Active' if is_forwarding else '⚪ Idle'}\n"
+                f"📥 Auto-approve: {len(auto_approve_channels)} channels\n"
+                f"🖼️ Watermark: {'🟢 On' if logo_config.get('enabled') else '⚪ Off'}"
+            )
     
     # ============ LOGO / WATERMARK HANDLERS ============
     
