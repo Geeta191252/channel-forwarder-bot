@@ -3578,8 +3578,12 @@ def register_bot_handlers():
                 # Resolve chat_id
                 chat_id = None
                 if isinstance(arg, str) and arg.lstrip("-").isdigit():
-                    chat_id = int(arg)
-                else:
+                    # Many users paste channel id without the leading "-".
+                    # Supergroup/channel ids are negative in Bot API (usually start with -100...).
+                    if not arg.startswith("-") and len(arg) >= 10:
+                        chat_id = -int(arg)
+                    else:
+                        chat_id = int(arg)
                     # getChat needs bot to already be in the chat
                     _, chat = await _get("getChat", {"chat_id": arg})
                     if not chat.get("ok"):
@@ -4012,7 +4016,7 @@ def register_bot_handlers():
                         jr_data = {"raw": (await r.text())[:200]}
                 results.append(f"**4. getChatJoinRequests** (status={jr_status}):\n```{str(jr_data)[:400]}```")
 
-            await message.reply("🔬 **Raw API Test Results**\n\n" + "\n\n".join(results), parse_mode=ParseMode.MARKDOWN)
+            await message.reply("🔬 Raw API Test Results\n\n" + "\n\n".join(results))
 
         except Exception as e:
             await message.reply(f"❌ rawtest error: {e}")
