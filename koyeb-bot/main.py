@@ -95,8 +95,8 @@ logo_config = {
 logo_stats = {"watermarked": 0, "failed": 0}
 
 # Content Moderation state
-moderation_config = {}  # {chat_id: {block_forward, block_links, block_badwords, enabled}}
-moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0, "warnings": 0, "bans": 0}
+moderation_config = {}  # {chat_id: {block_forward, block_links, block_badwords, block_mentions, enabled}}
+moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0, "deleted_mentions": 0, "warnings": 0, "bans": 0}
 user_warnings = {}  # {(chat_id, user_id): warning_count}
 MAX_WARNINGS = 3  # Auto-ban after this many warnings
 
@@ -159,10 +159,11 @@ def load_moderation_config(chat_id):
                 "enabled": saved.get("enabled", False),
                 "block_forward": saved.get("block_forward", False),
                 "block_links": saved.get("block_links", False),
-                "block_badwords": saved.get("block_badwords", False)
+                "block_badwords": saved.get("block_badwords", False),
+                "block_mentions": saved.get("block_mentions", False)
             }
             return moderation_config[chat_id]
-    return {"enabled": False, "block_forward": False, "block_links": False, "block_badwords": False}
+    return {"enabled": False, "block_forward": False, "block_links": False, "block_badwords": False, "block_mentions": False}
 
 
 def save_moderation_config(chat_id):
@@ -180,19 +181,24 @@ def save_moderation_config(chat_id):
 
 
 def contains_link(text):
-    """Check if text contains any URL/link"""
+    """Check if text contains any URL/link (not @mentions)"""
     import re
     url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
     tg_pattern = r'(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+'
-    username_link = r'@[a-zA-Z0-9_]{5,}'
     
     if re.search(url_pattern, text, re.IGNORECASE):
         return True
     if re.search(tg_pattern, text, re.IGNORECASE):
         return True
-    if re.search(username_link, text):
-        return True
     return False
+
+
+def contains_mention(text):
+    """Check if text contains @username mentions"""
+    import re
+    # Match @username pattern (at least 3 characters after @)
+    mention_pattern = r'@[a-zA-Z0-9_]{3,}'
+    return bool(re.search(mention_pattern, text))
 
 
 def contains_bad_words(text):
@@ -725,8 +731,14 @@ def register_bot_handlers():
             )
         elif data == "admin":
             await callback_query.message.reply(
-                "🆘 **Contact Admin**\n\n"
-                "For support, contact: @YourAdminUsername"
+                "🆘 **Admin Controls - Block @Mentions**\n\n"
+                "Block @username, @bot, @channel mentions in group!\n\n"
+                "**Commands (in group):**\n"
+                "/blockmention - Toggle @mention blocking\n"
+                "/enablemod - Enable moderation first\n"
+                "/modstatus - View all settings\n\n"
+                "⚡ When enabled, any message with @username will be deleted!\n"
+                "👮 Admins are exempt from this filter."
             )
         elif data == "join_request":
             channels_list = "\n".join([f"• `{ch}`" for ch in auto_approve_channels]) if auto_approve_channels else "None"
@@ -1273,6 +1285,33 @@ def register_bot_handlers():
         status = "🟢 ON" if not current else "🔴 OFF"
         await message.reply(f"🚫 **Block Inappropriate Content:** {status}")
     
+    @bot_client.on_message(filters.command("blockmention") & filters.group)
+    async def blockmention_handler(client, message):
+        """Toggle blocking @mentions"""
+        global moderation_config
+        
+        chat_id = message.chat.id
+        
+        # Check if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await message.reply("❌ Only admins can change this!")
+                return
+        except:
+            pass
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        current = moderation_config[chat_id].get("block_mentions", False)
+        moderation_config[chat_id]["block_mentions"] = not current
+        moderation_config[chat_id]["enabled"] = True
+        save_moderation_config(chat_id)
+        
+        status = "🟢 ON" if not current else "🔴 OFF"
+        await message.reply(f"📛 **Block @Mentions:** {status}\n\nAll @username, @bot, @channel mentions will be deleted!")
+    
     @bot_client.on_message(filters.command("modstatus") & filters.group)
     async def modstatus_handler(client, message):
         """Show moderation status"""
@@ -1288,18 +1327,20 @@ def register_bot_handlers():
             f"**Moderation:** {'🟢 Enabled' if config.get('enabled') else '🔴 Disabled'}\n"
             f"**Block Forwards:** {'🟢 ON' if config.get('block_forward') else '🔴 OFF'}\n"
             f"**Block Links:** {'🟢 ON' if config.get('block_links') else '🔴 OFF'}\n"
-            f"**Block Bad Words:** {'🟢 ON' if config.get('block_badwords') else '🔴 OFF'}\n\n"
+            f"**Block Bad Words:** {'🟢 ON' if config.get('block_badwords') else '🔴 OFF'}\n"
+            f"**Block @Mentions:** {'🟢 ON' if config.get('block_mentions') else '🔴 OFF'}\n\n"
             f"📊 **Stats:**\n"
             f"📨 Deleted forwards: {moderation_stats['deleted_forward']}\n"
             f"🔗 Deleted links: {moderation_stats['deleted_links']}\n"
             f"🚫 Deleted bad words: {moderation_stats['deleted_badwords']}\n"
+            f"📛 Deleted mentions: {moderation_stats['deleted_mentions']}\n"
             f"⚠️ Total warnings: {moderation_stats['warnings']}\n"
             f"🔨 Auto-bans: {moderation_stats['bans']}"
         )
     
     # ============ CONTENT MODERATION MESSAGE FILTER ============
     
-    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "modstatus", "warnings", "resetwarnings"]))
+    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "modstatus", "warnings", "resetwarnings"]))
     async def moderation_filter_handler(client, message):
         """Filter and delete inappropriate messages with warning system"""
         global moderation_stats, user_warnings
@@ -1405,6 +1446,13 @@ def register_bot_handlers():
                 await message.delete()
                 moderation_stats["deleted_badwords"] += 1
                 await add_warning_and_check_ban("Inappropriate/sexual content")
+                return
+            
+            # Check for @mentions
+            if config.get("block_mentions") and text and contains_mention(text):
+                await message.delete()
+                moderation_stats["deleted_mentions"] += 1
+                await add_warning_and_check_ban("@mentions not allowed")
                 return
                 
         except Exception as e:
