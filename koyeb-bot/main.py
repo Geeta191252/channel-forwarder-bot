@@ -1092,6 +1092,20 @@ def register_bot_handlers():
     
     # Load force subscribe channels on startup
     load_force_subscribe()
+
+    @bot_client.on_message(filters.command(["myid", "checkadmin"]))
+    async def myid_handler(client, message):
+        """Show your Telegram ID and whether the bot sees you as an admin"""
+        user_id = message.from_user.id if message.from_user else None
+        if not user_id:
+            return await message.reply("❌ Couldn't read your user id. If you're using anonymous admin mode in a group, turn it off and try again.")
+
+        await message.reply(
+            "🆔 **Your Telegram ID**\n"
+            f"`{user_id}`\n\n"
+            f"🛡️ **Bot admin:** {'✅ YES' if user_id in ADMIN_IDS else '❌ NO'}\n"
+            f"👥 **Bot admin IDs loaded:** {len(ADMIN_IDS)}"
+        )
     
     @bot_client.on_message(filters.command("start"))
     async def start_handler(client, message):
@@ -2673,7 +2687,11 @@ def register_bot_handlers():
             pass
         
         if not is_bot_admin and not is_group_admin:
-            await message.reply("❌ Only admins can enable moderation!")
+            await message.reply(
+                "❌ Only admins can enable moderation!\n\n"
+                f"Debug: your_id={user_id}, bot_admin={'YES' if is_bot_admin else 'NO'}.\n"
+                "Tip: If you enabled 'Anonymous admin' in the group, turn it OFF and try again."
+            )
             return
         
         if chat_id not in moderation_config:
