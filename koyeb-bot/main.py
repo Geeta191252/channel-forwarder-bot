@@ -33,6 +33,7 @@ moderation_col = db["group_moderation"] if db is not None else None
 warnings_col = db["user_warnings"] if db is not None else None
 user_channels_col = db["user_channels"] if db is not None else None
 force_sub_col = db["force_subscribe"] if db is not None else None
+referrals_col = db["referrals"] if db is not None else None
 
 # User state for channel input
 user_channel_state = {}  # {user_id: "waiting_add_channel"}
@@ -45,6 +46,15 @@ user_forward_progress = {}  # {user_id: {progress data...}}
 
 # Force subscribe channels list (loaded from DB)
 force_subscribe_channels = []  # [{"channel_id": "", "channel_name": "", "invite_link": ""}]
+
+# Admin IDs (loaded from env)
+ADMIN_IDS = set()
+admin_ids_env = os.getenv("ADMIN_IDS", "")
+if admin_ids_env:
+    ADMIN_IDS = set(int(x.strip()) for x in admin_ids_env.split(",") if x.strip().isdigit())
+
+# Referral requirement
+REQUIRED_REFERRALS = int(os.getenv("REQUIRED_REFERRALS", "10"))
 
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
@@ -377,6 +387,53 @@ async def check_user_joined(client, user_id):
             not_joined.append(channel)
     
     return len(not_joined) == 0, not_joined
+
+
+def is_admin(user_id):
+    """Check if user is admin"""
+    return user_id in ADMIN_IDS
+
+
+def get_referral_count(user_id):
+    """Get number of users referred by this user"""
+    if referrals_col is not None:
+        return referrals_col.count_documents({"referrer_id": user_id})
+    return 0
+
+
+def get_user_referrer(user_id):
+    """Get who referred this user"""
+    if referrals_col is not None:
+        doc = referrals_col.find_one({"user_id": user_id})
+        if doc:
+            return doc.get("referrer_id")
+    return None
+
+
+def add_referral(user_id, referrer_id):
+    """Add a referral record"""
+    if referrals_col is not None:
+        # Check if user already has a referrer
+        existing = referrals_col.find_one({"user_id": user_id})
+        if existing:
+            return False
+        
+        # Can't refer yourself
+        if user_id == referrer_id:
+            return False
+        
+        referrals_col.insert_one({
+            "user_id": user_id,
+            "referrer_id": referrer_id,
+            "referred_at": datetime.utcnow()
+        })
+        return True
+    return False
+
+
+def get_referral_link(bot_username, user_id):
+    """Generate referral link for user"""
+    return f"https://t.me/{bot_username}?start=ref_{user_id}"
 
 
 def save_progress():
@@ -1029,8 +1086,27 @@ def register_bot_handlers():
     @bot_client.on_message(filters.command("start"))
     async def start_handler(client, message):
         user_id = message.from_user.id
+        bot_info = await client.get_me()
+        bot_username = bot_info.username
         
-        # Check force subscribe
+        # Parse referral code from /start ref_USERID
+        referrer_id = None
+        if len(message.command) > 1:
+            param = message.command[1]
+            if param.startswith("ref_"):
+                try:
+                    referrer_id = int(param[4:])
+                    # Add referral if valid
+                    if referrer_id != user_id:
+                        add_referral(user_id, referrer_id)
+                except:
+                    pass
+        
+        # Check if user is admin (skip all requirements)
+        if is_admin(user_id):
+            return await show_main_menu(client, message)
+        
+        # Check force subscribe first
         if force_subscribe_channels:
             is_joined, not_joined = await check_user_joined(client, user_id)
             
@@ -1052,7 +1128,30 @@ def register_bot_handlers():
                 )
                 return
         
-        # User has joined all or no force subscribe
+        # Check referral requirement
+        ref_count = get_referral_count(user_id)
+        if ref_count < REQUIRED_REFERRALS:
+            ref_link = get_referral_link(bot_username, user_id)
+            remaining = REQUIRED_REFERRALS - ref_count
+            
+            await message.reply(
+                f"👥 **Referral Required!**\n\n"
+                f"You need to invite **{REQUIRED_REFERRALS} users** to use this bot.\n\n"
+                f"✅ Your referrals: **{ref_count}/{REQUIRED_REFERRALS}**\n"
+                f"❌ Remaining: **{remaining}**\n\n"
+                f"📤 **Your Referral Link:**\n`{ref_link}`\n\n"
+                f"Share this link with friends. When they start the bot using your link, you get +1 referral!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Check Again", callback_data="check_referrals")]
+                ])
+            )
+            return
+        
+        # User passed all checks - show main menu
+        await show_main_menu(client, message)
+    
+    async def show_main_menu(client, message):
+        """Show main menu to user"""
         num_accounts = len(user_clients)
         expected_speed = num_accounts * 30 if num_accounts else 0
         
@@ -1072,6 +1171,9 @@ def register_bot_handlers():
             ],
             [
                 InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
+                InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+            ],
+            [
                 InlineKeyboardButton("❓ Help", callback_data="help")
             ]
         ])
@@ -1188,7 +1290,67 @@ def register_bot_handlers():
             is_joined, not_joined = await check_user_joined(client, user_id)
             
             if is_joined:
-                # User has joined all channels, show main menu
+                # Check if admin (bypass referral)
+                if is_admin(user_id):
+                    num_accounts = len(user_clients)
+                    expected_speed = num_accounts * 30 if num_accounts else 0
+                    
+                    keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("📤 Forward", callback_data="forward"),
+                            InlineKeyboardButton("📢 Channel", callback_data="channel")
+                        ],
+                        [
+                            InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
+                            InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
+                        ],
+                        [
+                            InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
+                            InlineKeyboardButton("📥 Join Request", callback_data="join_request")
+                        ],
+                        [
+                            InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
+                            InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+                        ],
+                        [
+                            InlineKeyboardButton("❓ Help", callback_data="help")
+                        ]
+                    ])
+                    
+                    await callback_query.message.edit_text(
+                        f"✅ **Verification Successful!**\n\n"
+                        f"🚀 **Telegram Forwarder Bot**\n\n"
+                        f"👥 Active accounts: {num_accounts}\n"
+                        f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                        f"Select an option below:",
+                        reply_markup=keyboard
+                    )
+                    await callback_query.answer()
+                    return
+                
+                # Check referral requirement
+                ref_count = get_referral_count(user_id)
+                if ref_count < REQUIRED_REFERRALS:
+                    bot_info = await client.get_me()
+                    ref_link = get_referral_link(bot_info.username, user_id)
+                    remaining = REQUIRED_REFERRALS - ref_count
+                    
+                    await callback_query.message.edit_text(
+                        f"✅ **Channels Joined!**\n\n"
+                        f"👥 **Referral Required!**\n\n"
+                        f"You need to invite **{REQUIRED_REFERRALS} users** to use this bot.\n\n"
+                        f"✅ Your referrals: **{ref_count}/{REQUIRED_REFERRALS}**\n"
+                        f"❌ Remaining: **{remaining}**\n\n"
+                        f"📤 **Your Referral Link:**\n`{ref_link}`\n\n"
+                        f"Share this link with friends!",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Check Again", callback_data="check_referrals")]
+                        ])
+                    )
+                    await callback_query.answer()
+                    return
+                
+                # User passed all checks - show main menu
                 num_accounts = len(user_clients)
                 expected_speed = num_accounts * 30 if num_accounts else 0
                 
@@ -1207,6 +1369,9 @@ def register_bot_handlers():
                     ],
                     [
                         InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
+                        InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+                    ],
+                    [
                         InlineKeyboardButton("❓ Help", callback_data="help")
                     ]
                 ])
@@ -1235,6 +1400,123 @@ def register_bot_handlers():
                     reply_markup=InlineKeyboardMarkup(buttons)
                 )
             
+            await callback_query.answer()
+            return
+        
+        if data == "check_referrals":
+            user_id = callback_query.from_user.id
+            
+            # Check if admin
+            if is_admin(user_id):
+                num_accounts = len(user_clients)
+                expected_speed = num_accounts * 30 if num_accounts else 0
+                
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📤 Forward", callback_data="forward"),
+                        InlineKeyboardButton("📢 Channel", callback_data="channel")
+                    ],
+                    [
+                        InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
+                        InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
+                    ],
+                    [
+                        InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
+                        InlineKeyboardButton("📥 Join Request", callback_data="join_request")
+                    ],
+                    [
+                        InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
+                        InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+                    ],
+                    [
+                        InlineKeyboardButton("❓ Help", callback_data="help")
+                    ]
+                ])
+                
+                await callback_query.message.edit_text(
+                    f"✅ **Admin Access!**\n\n"
+                    f"🚀 **Telegram Forwarder Bot**\n\n"
+                    f"👥 Active accounts: {num_accounts}\n"
+                    f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                    f"Select an option below:",
+                    reply_markup=keyboard
+                )
+                await callback_query.answer()
+                return
+            
+            ref_count = get_referral_count(user_id)
+            
+            if ref_count >= REQUIRED_REFERRALS:
+                # User has enough referrals - show main menu
+                num_accounts = len(user_clients)
+                expected_speed = num_accounts * 30 if num_accounts else 0
+                
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📤 Forward", callback_data="forward"),
+                        InlineKeyboardButton("📢 Channel", callback_data="channel")
+                    ],
+                    [
+                        InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
+                        InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
+                    ],
+                    [
+                        InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
+                        InlineKeyboardButton("📥 Join Request", callback_data="join_request")
+                    ],
+                    [
+                        InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
+                        InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+                    ],
+                    [
+                        InlineKeyboardButton("❓ Help", callback_data="help")
+                    ]
+                ])
+                
+                await callback_query.message.edit_text(
+                    f"✅ **Referral Complete!**\n\n"
+                    f"🚀 **Telegram Forwarder Bot**\n\n"
+                    f"👥 Active accounts: {num_accounts}\n"
+                    f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                    f"Select an option below:",
+                    reply_markup=keyboard
+                )
+            else:
+                bot_info = await client.get_me()
+                ref_link = get_referral_link(bot_info.username, user_id)
+                remaining = REQUIRED_REFERRALS - ref_count
+                
+                await callback_query.message.edit_text(
+                    f"👥 **Referral Required!**\n\n"
+                    f"You need to invite **{REQUIRED_REFERRALS} users** to use this bot.\n\n"
+                    f"✅ Your referrals: **{ref_count}/{REQUIRED_REFERRALS}**\n"
+                    f"❌ Remaining: **{remaining}**\n\n"
+                    f"📤 **Your Referral Link:**\n`{ref_link}`\n\n"
+                    f"Share this link with friends!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Check Again", callback_data="check_referrals")]
+                    ])
+                )
+            
+            await callback_query.answer()
+            return
+        
+        if data == "my_referral":
+            user_id = callback_query.from_user.id
+            bot_info = await client.get_me()
+            ref_link = get_referral_link(bot_info.username, user_id)
+            ref_count = get_referral_count(user_id)
+            
+            await callback_query.message.edit_text(
+                f"👥 **Your Referral Stats**\n\n"
+                f"✅ Total referrals: **{ref_count}**\n"
+                f"🎯 Required: **{REQUIRED_REFERRALS}**\n\n"
+                f"📤 **Your Referral Link:**\n`{ref_link}`\n\n"
+                f"Share this link to invite friends!",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                ])
+            )
             await callback_query.answer()
             return
         
@@ -1357,6 +1639,9 @@ def register_bot_handlers():
                 ],
                 [
                     InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
+                    InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+                ],
+                [
                     InlineKeyboardButton("❓ Help", callback_data="help")
                 ]
             ])
