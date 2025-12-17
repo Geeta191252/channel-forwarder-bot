@@ -6,7 +6,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate
+from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate, MessageNotModified
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
@@ -47,9 +47,9 @@ user_forward_progress = {}  # {user_id: {progress data...}}
 # Force subscribe channels list (loaded from DB)
 force_subscribe_channels = []  # [{"channel_id": "", "channel_name": "", "invite_link": ""}]
 
-# Admin IDs (loaded from env)
+# Admin IDs (loaded from env) - supports both ADMIN_IDS and ADMIN_USER_ID
 ADMIN_IDS = set()
-admin_ids_env = os.getenv("ADMIN_IDS", "")
+admin_ids_env = os.getenv("ADMIN_IDS", "") or os.getenv("ADMIN_USER_ID", "")
 if admin_ids_env:
     ADMIN_IDS = set(int(x.strip()) for x in admin_ids_env.split(",") if x.strip().isdigit())
 
@@ -392,6 +392,16 @@ async def check_user_joined(client, user_id):
 def is_admin(user_id):
     """Check if user is admin"""
     return user_id in ADMIN_IDS
+
+
+async def safe_edit_message(message, text, reply_markup=None):
+    """Safely edit message, ignoring MESSAGE_NOT_MODIFIED errors"""
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except MessageNotModified:
+        pass  # Ignore if message content is the same
+    except Exception as e:
+        print(f"Error editing message: {e}")
 
 
 def get_referral_count(user_id):
@@ -1317,7 +1327,8 @@ def register_bot_handlers():
                         ]
                     ])
                     
-                    await callback_query.message.edit_text(
+                    await safe_edit_message(
+                        callback_query.message,
                         f"✅ **Verification Successful!**\n\n"
                         f"🚀 **Telegram Forwarder Bot**\n\n"
                         f"👥 Active accounts: {num_accounts}\n"
@@ -1335,7 +1346,8 @@ def register_bot_handlers():
                     ref_link = get_referral_link(bot_info.username, user_id)
                     remaining = REQUIRED_REFERRALS - ref_count
                     
-                    await callback_query.message.edit_text(
+                    await safe_edit_message(
+                        callback_query.message,
                         f"✅ **Channels Joined!**\n\n"
                         f"👥 **Referral Required!**\n\n"
                         f"You need to invite **{REQUIRED_REFERRALS} users** to use this bot.\n\n"
@@ -1376,7 +1388,8 @@ def register_bot_handlers():
                     ]
                 ])
                 
-                await callback_query.message.edit_text(
+                await safe_edit_message(
+                    callback_query.message,
                     f"✅ **Verification Successful!**\n\n"
                     f"🚀 **Telegram Forwarder Bot**\n\n"
                     f"👥 Active accounts: {num_accounts}\n"
@@ -1393,7 +1406,8 @@ def register_bot_handlers():
                 
                 buttons.append([InlineKeyboardButton("✅ Joined All - Verify", callback_data="check_joined")])
                 
-                await callback_query.message.edit_text(
+                await safe_edit_message(
+                    callback_query.message,
                     "❌ **Not Joined Yet!**\n\n"
                     f"You still need to join **{len(not_joined)}** channel(s):\n\n"
                     "👇 Click below to join, then click **Verify** again:",
@@ -1433,7 +1447,8 @@ def register_bot_handlers():
                     ]
                 ])
                 
-                await callback_query.message.edit_text(
+                await safe_edit_message(
+                    callback_query.message,
                     f"✅ **Admin Access!**\n\n"
                     f"🚀 **Telegram Forwarder Bot**\n\n"
                     f"👥 Active accounts: {num_accounts}\n"
@@ -1473,7 +1488,8 @@ def register_bot_handlers():
                     ]
                 ])
                 
-                await callback_query.message.edit_text(
+                await safe_edit_message(
+                    callback_query.message,
                     f"✅ **Referral Complete!**\n\n"
                     f"🚀 **Telegram Forwarder Bot**\n\n"
                     f"👥 Active accounts: {num_accounts}\n"
@@ -1486,7 +1502,8 @@ def register_bot_handlers():
                 ref_link = get_referral_link(bot_info.username, user_id)
                 remaining = REQUIRED_REFERRALS - ref_count
                 
-                await callback_query.message.edit_text(
+                await safe_edit_message(
+                    callback_query.message,
                     f"👥 **Referral Required!**\n\n"
                     f"You need to invite **{REQUIRED_REFERRALS} users** to use this bot.\n\n"
                     f"✅ Your referrals: **{ref_count}/{REQUIRED_REFERRALS}**\n"
@@ -1507,7 +1524,8 @@ def register_bot_handlers():
             ref_link = get_referral_link(bot_info.username, user_id)
             ref_count = get_referral_count(user_id)
             
-            await callback_query.message.edit_text(
+            await safe_edit_message(
+                callback_query.message,
                 f"👥 **Your Referral Stats**\n\n"
                 f"✅ Total referrals: **{ref_count}**\n"
                 f"🎯 Required: **{REQUIRED_REFERRALS}**\n\n"
