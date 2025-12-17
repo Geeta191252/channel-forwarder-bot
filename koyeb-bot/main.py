@@ -3658,8 +3658,8 @@ def register_bot_handlers():
                                 if "not found" in error_desc.lower():
                                     await status_msg.edit(
                                         "❌ **Error: Not Found**\n\n"
-                                        "Ye usually **BOT_TOKEN invalid** hone par aata hai.\n"
-                                        "BOT_TOKEN / TELEGRAM_BOT_TOKEN ko re-check karo (no extra spaces)."
+                                        "Agar BOT_TOKEN sahi hai, to ye **Telegram API method Not Found** bhi ho sakta hai (rare), ya response parse issue.\n\n"
+                                        f"Debug: HTTP {resp.status} | {error_desc}"
                                     )
                                     return
                                 if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower():
