@@ -3509,7 +3509,7 @@ def register_bot_handlers():
             f"❌ Failed: {auto_approve_stats['failed']}"
         )
     
-    @bot_client.on_message(filters.command("approveall"))
+    @bot_client.on_message(filters.regex(r"^/approveall(?:@\w+)?(?:\s+|-|$)"))
     async def approveall_handler(client, message):
         """Approve all pending join requests for a channel/group using BOT"""
         global auto_approve_stats
@@ -3541,19 +3541,26 @@ def register_bot_handlers():
                 return
         
         try:
-            parts = message.text.split()
-            if len(parts) != 2:
+            text = (message.text or "").strip()
+            m = re.match(r"^/approveall(?:@\w+)?\s*(.*)$", text)
+            arg = (m.group(1).strip() if m else "")
+
+            # Support both styles:
+            # /approveall -100...
+            # /approveall-100...
+            if not arg:
                 await message.reply(
                     "Usage: /approveall <channel/group>\n\n"
                     "Examples:\n"
                     "• /approveall @mychannel\n"
                     "• /approveall @mygroup\n"
-                    "• /approveall -1001234567890\n\n"
+                    "• /approveall -1001234567890\n"
+                    "• /approveall-1001234567890\n\n"
                     "⚠️ Bot must be admin with 'Add Members' permission!"
                 )
                 return
-            
-            channel = parts[1]
+
+            channel = arg
             
             status_msg = await message.reply(f"🔄 Approving all pending requests for {channel}...\n⏳ Please wait...")
             
