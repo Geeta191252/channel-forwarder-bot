@@ -3517,8 +3517,18 @@ def register_bot_handlers():
         
         # Check if user is bot admin or group admin
         user_id = message.from_user.id if message.from_user else None
-        if user_id not in BOT_ADMINS:
-            if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+
+        # If command is sent *as the channel itself* (no from_user), allow it.
+        # In Telegram, only channel admins can post as the channel.
+        is_channel_post = (
+            user_id is None
+            and getattr(message, "sender_chat", None) is not None
+            and message.chat.type == ChatType.CHANNEL
+            and message.sender_chat.id == message.chat.id
+        )
+
+        if not is_channel_post and user_id not in BOT_ADMINS:
+            if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and user_id is not None:
                 member = await client.get_chat_member(message.chat.id, user_id)
                 if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                     await message.reply("❌ Only admins can use this command!")
