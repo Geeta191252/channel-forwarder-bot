@@ -29,6 +29,7 @@ forwarded_col = db["forwarded_messages"] if db is not None else None
 config_col = db["bot_config"] if db is not None else None
 autoapprove_col = db["auto_approve"] if db is not None else None
 logo_col = db["logo_config"] if db is not None else None
+moderation_col = db["group_moderation"] if db is not None else None
 
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
@@ -92,6 +93,18 @@ logo_config = {
 }
 logo_stats = {"watermarked": 0, "failed": 0}
 
+# Content Moderation state
+moderation_config = {}  # {chat_id: {block_forward, block_links, block_badwords, enabled}}
+moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0}
+
+# Bad words list for content filtering (Hindi + English inappropriate words)
+BAD_WORDS = [
+    "sex", "xxx", "porn", "nude", "naked", "fuck", "bitch", "ass", "dick", "pussy",
+    "boobs", "tits", "cock", "cum", "horny", "slut", "whore", "sexy", "adult",
+    "chut", "lund", "gaand", "bhosdike", "madarchod", "behenchod", "chutiya",
+    "randi", "harami", "kamina", "gandu", "lawde", "sala", "kutta", "kutti"
+]
+
 # Pyrogram clients - Multiple user accounts for speed
 user_clients = []  # List of (name, client) tuples
 bot_client = None   # Bot for commands/UI
@@ -122,6 +135,61 @@ def save_logo_config():
             {"$set": {**logo_config, "updated_at": datetime.utcnow()}},
             upsert=True
         )
+
+
+def load_moderation_config(chat_id):
+    """Load moderation config for a chat from database"""
+    global moderation_config
+    if moderation_col is not None:
+        saved = moderation_col.find_one({"chat_id": chat_id})
+        if saved:
+            moderation_config[chat_id] = {
+                "enabled": saved.get("enabled", False),
+                "block_forward": saved.get("block_forward", False),
+                "block_links": saved.get("block_links", False),
+                "block_badwords": saved.get("block_badwords", False)
+            }
+            return moderation_config[chat_id]
+    return {"enabled": False, "block_forward": False, "block_links": False, "block_badwords": False}
+
+
+def save_moderation_config(chat_id):
+    """Save moderation config for a chat to database"""
+    if moderation_col is not None and chat_id in moderation_config:
+        moderation_col.update_one(
+            {"chat_id": chat_id},
+            {"$set": {
+                **moderation_config[chat_id],
+                "chat_id": chat_id,
+                "updated_at": datetime.utcnow()
+            }},
+            upsert=True
+        )
+
+
+def contains_link(text):
+    """Check if text contains any URL/link"""
+    import re
+    url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    tg_pattern = r'(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+'
+    username_link = r'@[a-zA-Z0-9_]{5,}'
+    
+    if re.search(url_pattern, text, re.IGNORECASE):
+        return True
+    if re.search(tg_pattern, text, re.IGNORECASE):
+        return True
+    if re.search(username_link, text):
+        return True
+    return False
+
+
+def contains_bad_words(text):
+    """Check if text contains inappropriate words"""
+    text_lower = text.lower()
+    for word in BAD_WORDS:
+        if word in text_lower:
+            return True
+    return False
 
 
 def get_config():
@@ -583,7 +651,7 @@ def register_bot_handlers():
                 InlineKeyboardButton("📢 Channel", callback_data="channel")
             ],
             [
-                InlineKeyboardButton("🔞 Porn", callback_data="porn"),
+                InlineKeyboardButton("🛡️ Moderation", callback_data="moderation"),
                 InlineKeyboardButton("🆘 @Admin", callback_data="admin")
             ],
             [
@@ -621,11 +689,19 @@ def register_bot_handlers():
                 "Use /setconfig to set source and destination channels.\n"
                 "Example: /setconfig @source_channel @dest_channel"
             )
-        elif data == "porn":
+        elif data == "moderation":
             await callback_query.message.reply(
-                "🔞 **Adult Content Mode**\n\n"
-                "Forward adult content between channels.\n"
-                "Make sure destination channel allows such content."
+                "🛡️ **Content Moderation**\n\n"
+                "Add bot as admin in your group, then use:\n\n"
+                "**Commands (in group):**\n"
+                "/enablemod - Enable moderation\n"
+                "/disablemod - Disable moderation\n"
+                "/blockforward - Block forwarded messages\n"
+                "/blocklinks - Block links/URLs/usernames\n"
+                "/blockbadwords - Block inappropriate content\n"
+                "/modstatus - View moderation settings\n\n"
+                "⚡ Messages will be deleted instantly!\n"
+                "👮 Admins are exempt from all filters."
             )
         elif data == "admin":
             await callback_query.message.reply(
@@ -674,6 +750,7 @@ def register_bot_handlers():
         elif data == "help":
             await callback_query.message.reply(
                 "❓ **Help Menu**\n\n"
+                "**📤 Forwarding:**\n"
                 "/start - Show main menu\n"
                 "/setconfig - Set channels\n"
                 "/forward - Start forwarding\n"
@@ -681,7 +758,13 @@ def register_bot_handlers():
                 "/stop - Stop forwarding\n"
                 "/progress - Show progress\n"
                 "/status - Show status\n"
-                "/accounts - Show connected accounts"
+                "/accounts - Show accounts\n\n"
+                "**🛡️ Moderation (in groups):**\n"
+                "/enablemod - Enable moderation\n"
+                "/blockforward - Block forwards\n"
+                "/blocklinks - Block links\n"
+                "/blockbadwords - Block bad content\n"
+                "/modstatus - View settings"
             )
         
         await callback_query.answer()
@@ -1030,6 +1113,222 @@ def register_bot_handlers():
             f"✅ Watermarked: {logo_stats['watermarked']}\n"
             f"❌ Failed: {logo_stats['failed']}"
         )
+    
+    # ============ CONTENT MODERATION HANDLERS ============
+    
+    @bot_client.on_message(filters.command("enablemod") & filters.group)
+    async def enablemod_handler(client, message):
+        """Enable content moderation in this group"""
+        global moderation_config
+        
+        chat_id = message.chat.id
+        
+        # Check if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await message.reply("❌ Only admins can enable moderation!")
+                return
+        except:
+            pass
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        moderation_config[chat_id]["enabled"] = True
+        save_moderation_config(chat_id)
+        
+        await message.reply(
+            "✅ **Content Moderation Enabled!**\n\n"
+            "Commands:\n"
+            "• /blockforward - Block forwarded messages\n"
+            "• /blocklinks - Block links/URLs\n"
+            "• /blockbadwords - Block inappropriate content\n"
+            "• /modstatus - View moderation settings\n"
+            "• /disablemod - Disable moderation"
+        )
+    
+    @bot_client.on_message(filters.command("disablemod") & filters.group)
+    async def disablemod_handler(client, message):
+        """Disable content moderation"""
+        global moderation_config
+        
+        chat_id = message.chat.id
+        
+        # Check if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await message.reply("❌ Only admins can disable moderation!")
+                return
+        except:
+            pass
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        moderation_config[chat_id]["enabled"] = False
+        save_moderation_config(chat_id)
+        
+        await message.reply("🔴 **Content Moderation Disabled!**")
+    
+    @bot_client.on_message(filters.command("blockforward") & filters.group)
+    async def blockforward_handler(client, message):
+        """Toggle blocking forwarded messages"""
+        global moderation_config
+        
+        chat_id = message.chat.id
+        
+        # Check if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await message.reply("❌ Only admins can change this!")
+                return
+        except:
+            pass
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        current = moderation_config[chat_id].get("block_forward", False)
+        moderation_config[chat_id]["block_forward"] = not current
+        moderation_config[chat_id]["enabled"] = True
+        save_moderation_config(chat_id)
+        
+        status = "🟢 ON" if not current else "🔴 OFF"
+        await message.reply(f"📨 **Block Forwarded Messages:** {status}")
+    
+    @bot_client.on_message(filters.command("blocklinks") & filters.group)
+    async def blocklinks_handler(client, message):
+        """Toggle blocking messages with links"""
+        global moderation_config
+        
+        chat_id = message.chat.id
+        
+        # Check if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await message.reply("❌ Only admins can change this!")
+                return
+        except:
+            pass
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        current = moderation_config[chat_id].get("block_links", False)
+        moderation_config[chat_id]["block_links"] = not current
+        moderation_config[chat_id]["enabled"] = True
+        save_moderation_config(chat_id)
+        
+        status = "🟢 ON" if not current else "🔴 OFF"
+        await message.reply(f"🔗 **Block Links/URLs:** {status}")
+    
+    @bot_client.on_message(filters.command("blockbadwords") & filters.group)
+    async def blockbadwords_handler(client, message):
+        """Toggle blocking inappropriate content"""
+        global moderation_config
+        
+        chat_id = message.chat.id
+        
+        # Check if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status not in ["administrator", "creator"]:
+                await message.reply("❌ Only admins can change this!")
+                return
+        except:
+            pass
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        current = moderation_config[chat_id].get("block_badwords", False)
+        moderation_config[chat_id]["block_badwords"] = not current
+        moderation_config[chat_id]["enabled"] = True
+        save_moderation_config(chat_id)
+        
+        status = "🟢 ON" if not current else "🔴 OFF"
+        await message.reply(f"🚫 **Block Inappropriate Content:** {status}")
+    
+    @bot_client.on_message(filters.command("modstatus") & filters.group)
+    async def modstatus_handler(client, message):
+        """Show moderation status"""
+        chat_id = message.chat.id
+        
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        config = moderation_config.get(chat_id, {})
+        
+        await message.reply(
+            "🛡️ **Content Moderation Status**\n\n"
+            f"**Moderation:** {'🟢 Enabled' if config.get('enabled') else '🔴 Disabled'}\n"
+            f"**Block Forwards:** {'🟢 ON' if config.get('block_forward') else '🔴 OFF'}\n"
+            f"**Block Links:** {'🟢 ON' if config.get('block_links') else '🔴 OFF'}\n"
+            f"**Block Bad Words:** {'🟢 ON' if config.get('block_badwords') else '🔴 OFF'}\n\n"
+            f"📊 **Stats:**\n"
+            f"📨 Deleted forwards: {moderation_stats['deleted_forward']}\n"
+            f"🔗 Deleted links: {moderation_stats['deleted_links']}\n"
+            f"🚫 Deleted bad words: {moderation_stats['deleted_badwords']}"
+        )
+    
+    # ============ CONTENT MODERATION MESSAGE FILTER ============
+    
+    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "modstatus"]))
+    async def moderation_filter_handler(client, message):
+        """Filter and delete inappropriate messages"""
+        global moderation_stats
+        
+        chat_id = message.chat.id
+        
+        # Load config if not in memory
+        if chat_id not in moderation_config:
+            moderation_config[chat_id] = load_moderation_config(chat_id)
+        
+        config = moderation_config.get(chat_id, {})
+        
+        # Skip if moderation is disabled
+        if not config.get("enabled"):
+            return
+        
+        # Skip if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, message.from_user.id)
+            if member.status in ["administrator", "creator"]:
+                return
+        except:
+            pass
+        
+        try:
+            # Check for forwarded messages
+            if config.get("block_forward") and message.forward_date:
+                await message.delete()
+                moderation_stats["deleted_forward"] += 1
+                print(f"🚫 Deleted forwarded message from {message.from_user.first_name}")
+                return
+            
+            # Get message text
+            text = message.text or message.caption or ""
+            
+            # Check for links
+            if config.get("block_links") and text and contains_link(text):
+                await message.delete()
+                moderation_stats["deleted_links"] += 1
+                print(f"🚫 Deleted message with link from {message.from_user.first_name}")
+                return
+            
+            # Check for bad words
+            if config.get("block_badwords") and text and contains_bad_words(text):
+                await message.delete()
+                moderation_stats["deleted_badwords"] += 1
+                print(f"🚫 Deleted inappropriate message from {message.from_user.first_name}")
+                return
+                
+        except Exception as e:
+            print(f"Moderation error: {e}")
     
     # ============ JOIN REQUEST AUTO-APPROVE HANDLERS ============
     
