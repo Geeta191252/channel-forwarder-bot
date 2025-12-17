@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from flask import Flask, request, jsonify
 from pyrogram import Client, filters, idle
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -362,19 +363,86 @@ def register_bot_handlers():
         num_accounts = len(user_clients)
         expected_speed = num_accounts * 30 if num_accounts else 0
         
+        # Inline keyboard buttons
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📤 Forward", callback_data="forward"),
+                InlineKeyboardButton("📢 Channel", callback_data="channel")
+            ],
+            [
+                InlineKeyboardButton("🔞 Porn", callback_data="porn"),
+                InlineKeyboardButton("🆘 @Admin", callback_data="admin")
+            ],
+            [
+                InlineKeyboardButton("📥 Join Request", callback_data="join_request"),
+                InlineKeyboardButton("📁 File Logo", callback_data="file_logo")
+            ],
+            [
+                InlineKeyboardButton("❓ Help", callback_data="help")
+            ]
+        ])
+        
         await message.reply(
             f"🚀 **Telegram Forwarder Bot (Multi-Account MTProto)**\n\n"
             f"👥 Active accounts: {num_accounts}\n"
             f"⚡ Expected speed: ~{expected_speed}/min\n\n"
-            f"Commands:\n"
-            f"/setconfig <source> <dest> - Set channels\n"
-            f"/forward <start_id> <end_id> - Start forwarding\n"
-            f"/resume - Resume forwarding\n"
-            f"/stop - Stop forwarding\n"
-            f"/progress - Show progress\n"
-            f"/status - Show status\n"
-            f"/accounts - Show connected accounts"
+            f"Select an option below or use commands:",
+            reply_markup=keyboard
         )
+    
+    @bot_client.on_callback_query()
+    async def callback_handler(client, callback_query):
+        data = callback_query.data
+        
+        if data == "forward":
+            await callback_query.message.reply(
+                "📤 **Forward Messages**\n\n"
+                "1️⃣ Set config: /setconfig <source> <dest>\n"
+                "2️⃣ Start: /forward <start_id> <end_id>\n"
+                "3️⃣ Resume: /resume\n"
+                "4️⃣ Stop: /stop"
+            )
+        elif data == "channel":
+            await callback_query.message.reply(
+                "📢 **Channel Setup**\n\n"
+                "Use /setconfig to set source and destination channels.\n"
+                "Example: /setconfig @source_channel @dest_channel"
+            )
+        elif data == "porn":
+            await callback_query.message.reply(
+                "🔞 **Adult Content Mode**\n\n"
+                "Forward adult content between channels.\n"
+                "Make sure destination channel allows such content."
+            )
+        elif data == "admin":
+            await callback_query.message.reply(
+                "🆘 **Contact Admin**\n\n"
+                "For support, contact: @YourAdminUsername"
+            )
+        elif data == "join_request":
+            await callback_query.message.reply(
+                "📥 **Join Request**\n\n"
+                "Auto-approve join requests feature coming soon!"
+            )
+        elif data == "file_logo":
+            await callback_query.message.reply(
+                "📁 **File Logo**\n\n"
+                "Add custom logos to forwarded files - coming soon!"
+            )
+        elif data == "help":
+            await callback_query.message.reply(
+                "❓ **Help Menu**\n\n"
+                "/start - Show main menu\n"
+                "/setconfig - Set channels\n"
+                "/forward - Start forwarding\n"
+                "/resume - Resume forwarding\n"
+                "/stop - Stop forwarding\n"
+                "/progress - Show progress\n"
+                "/status - Show status\n"
+                "/accounts - Show connected accounts"
+            )
+        
+        await callback_query.answer()
     
     @bot_client.on_message(filters.command("accounts"))
     async def accounts_handler(client, message):
