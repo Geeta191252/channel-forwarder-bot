@@ -97,12 +97,21 @@ logo_stats = {"watermarked": 0, "failed": 0}
 moderation_config = {}  # {chat_id: {block_forward, block_links, block_badwords, enabled}}
 moderation_stats = {"deleted_forward": 0, "deleted_links": 0, "deleted_badwords": 0}
 
-# Bad words list for content filtering (Hindi + English inappropriate words)
+# Bad words list for content filtering (Hindi + English inappropriate/sexual words)
 BAD_WORDS = [
+    # English sexual words
     "sex", "xxx", "porn", "nude", "naked", "fuck", "bitch", "ass", "dick", "pussy",
     "boobs", "tits", "cock", "cum", "horny", "slut", "whore", "sexy", "adult",
+    "vagina", "penis", "orgasm", "masturbat", "blowjob", "handjob", "dildo",
+    "nipple", "erotic", "seduce", "onlyfans", "xvideos", "pornhub", "xnxx",
+    "milf", "threesome", "gangbang", "creampie", "anal", "69",
+    # Hindi/Urdu sexual/abusive words  
     "chut", "lund", "gaand", "bhosdike", "madarchod", "behenchod", "chutiya",
-    "randi", "harami", "kamina", "gandu", "lawde", "sala", "kutta", "kutti"
+    "randi", "harami", "kamina", "gandu", "lawde", "sala", "kutta", "kutti",
+    "chod", "muth", "jhant", "boor", "bund", "chuchi", "boobs", "raand",
+    "chakka", "hijra", "dalla", "dalal", "pataka", "maal", "item",
+    "chodne", "chudai", "chudwana", "land", "lauda", "loda", "choot",
+    "bhadwa", "bhadwe", "bsdk", "mc", "bc", "mkc", "bkc"
 ]
 
 # Pyrogram clients - Multiple user accounts for speed
@@ -698,8 +707,13 @@ def register_bot_handlers():
                 "/disablemod - Disable moderation\n"
                 "/blockforward - Block forwarded messages\n"
                 "/blocklinks - Block links/URLs/usernames\n"
-                "/blockbadwords - Block inappropriate content\n"
+                "/blockbadwords - 🔞 Block sex/adult content\n"
                 "/modstatus - View moderation settings\n\n"
+                "🔞 **Sex Content Filter:**\n"
+                "Use /blockbadwords to auto-delete:\n"
+                "• Sex messages (sex, porn, xxx, etc.)\n"
+                "• Adult content\n"
+                "• Abusive words (Hindi/English)\n\n"
                 "⚡ Messages will be deleted instantly!\n"
                 "👮 Admins are exempt from all filters."
             )
