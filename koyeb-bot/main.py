@@ -3703,32 +3703,36 @@ def register_bot_handlers():
                     except Exception:
                         pass
 
-                # METHOD 1: Try Pyrogram's native get_chat_join_requests
-                pyrogram_worked = False
-                try:
-                    await status_msg.edit(f"🔄 Method 1: Pyrogram native...\n{channel}")
-                    async for join_request in client.get_chat_join_requests(chat_id):
-                        try:
-                            await client.approve_chat_join_request(chat_id, join_request.user.id)
-                            approved += 1
-                            auto_approve_stats["approved"] += 1
-                            
-                            if approved % 20 == 0:
-                                try:
-                                    await status_msg.edit(f"🔄 Approving (Pyrogram)...\n✅ {approved} | ❌ {failed}")
-                                except:
-                                    pass
-                            await asyncio.sleep(0.2)
-                        except Exception as e:
-                            failed += 1
-                            auto_approve_stats["failed"] += 1
-                            print(f"Failed to approve {join_request.user.id}: {e}")
-                    pyrogram_worked = True
-                except Exception as e:
-                    print(f"Pyrogram get_chat_join_requests failed: {e}")
+                # METHOD 1: Try USERBOT client (SESSION_STRING) - only user accounts can list join requests
+                userbot_worked = False
+                if user_clients:
+                    userbot_name, userbot = user_clients[0]  # Use first userbot
+                    try:
+                        await status_msg.edit(f"🔄 Method 1: Userbot ({userbot_name})...\n{channel}")
+                        async for join_request in userbot.get_chat_join_requests(chat_id):
+                            try:
+                                await userbot.approve_chat_join_request(chat_id, join_request.user.id)
+                                approved += 1
+                                auto_approve_stats["approved"] += 1
+                                
+                                if approved % 20 == 0:
+                                    try:
+                                        await status_msg.edit(f"🔄 Approving (Userbot)...\n✅ {approved} | ❌ {failed}")
+                                    except:
+                                        pass
+                                await asyncio.sleep(0.2)
+                            except Exception as e:
+                                failed += 1
+                                auto_approve_stats["failed"] += 1
+                                print(f"Failed to approve {join_request.user.id}: {e}")
+                        userbot_worked = True
+                    except Exception as e:
+                        print(f"Userbot get_chat_join_requests failed: {e}")
+                else:
+                    print("No userbot available (SESSION_STRING not set)")
 
                 # METHOD 2: If Pyrogram didn't work or found nothing, try raw Bot API
-                if not pyrogram_worked or (approved == 0 and failed == 0):
+                if not userbot_worked or (approved == 0 and failed == 0):
                     import aiohttp
                     bot_token = BOT_TOKEN
                     if bot_token:
