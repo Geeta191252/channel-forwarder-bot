@@ -1923,24 +1923,45 @@ def register_bot_handlers():
             )
             await callback_query.answer()
         elif data == "help":
+            user_id = callback_query.from_user.id
+            
+            # Show different help based on admin status
+            if user_id in ADMIN_IDS:
+                help_text = (
+                    "❓ **Help Menu**\n\n"
+                    "**📤 Forwarding:**\n"
+                    "/start - Show main menu\n"
+                    "/setconfig - Set channels\n"
+                    "/forward - Start forwarding\n"
+                    "/resume - Resume forwarding\n"
+                    "/stop - Stop forwarding\n"
+                    "/progress - Show progress\n"
+                    "/status - Show status\n"
+                    "/accounts - Show accounts\n\n"
+                    "**🛡️ Moderation (in groups):**\n"
+                    "/enablemod - Enable moderation\n"
+                    "/blockforward - Block forwards\n"
+                    "/blocklinks - Block links\n"
+                    "/blockbadwords - Block bad content\n"
+                    "/modstatus - View settings"
+                )
+            else:
+                help_text = (
+                    "❓ **Help Menu**\n\n"
+                    "**📤 Forwarding:**\n"
+                    "/start - Show main menu\n"
+                    "/forward - Start forwarding\n\n"
+                    "**🛡️ Moderation (in groups):**\n"
+                    "/enablemod - Enable moderation\n"
+                    "/blockforward - Block forwards\n"
+                    "/blocklinks - Block links\n"
+                    "/blockbadwords - Block bad content\n"
+                    "/modstatus - View settings"
+                )
+            
             await safe_edit_message(
                 callback_query.message,
-                "❓ **Help Menu**\n\n"
-                "**📤 Forwarding:**\n"
-                "/start - Show main menu\n"
-                "/setconfig - Set channels\n"
-                "/forward - Start forwarding\n"
-                "/resume - Resume forwarding\n"
-                "/stop - Stop forwarding\n"
-                "/progress - Show progress\n"
-                "/status - Show status\n"
-                "/accounts - Show accounts\n\n"
-                "**🛡️ Moderation (in groups):**\n"
-                "/enablemod - Enable moderation\n"
-                "/blockforward - Block forwards\n"
-                "/blocklinks - Block links\n"
-                "/blockbadwords - Block bad content\n"
-                "/modstatus - View settings",
+                help_text,
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
                 ])
@@ -2266,6 +2287,11 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("setconfig"))
     async def setconfig_handler(client, message):
+        # Admin only command
+        if message.from_user.id not in ADMIN_IDS:
+            await message.reply("❌ This command is only for admins!")
+            return
+        
         try:
             parts = message.text.split()
             if len(parts) != 3:
@@ -2327,6 +2353,11 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("resume"))
     async def resume_handler(client, message):
+        # Admin only command
+        if message.from_user.id not in ADMIN_IDS:
+            await message.reply("❌ This command is only for admins!")
+            return
+        
         global is_forwarding
         
         if is_forwarding:
@@ -2365,6 +2396,11 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("stop"))
     async def stop_handler(client, message):
+        # Admin only command
+        if message.from_user.id not in ADMIN_IDS:
+            await message.reply("❌ This command is only for admins!")
+            return
+        
         global stop_requested
         stop_requested = True
         await message.reply("🛑 Stop requested...")
