@@ -3093,7 +3093,7 @@ def register_bot_handlers():
     
     # ============ PRIVATE MESSAGE HANDLER FOR CHANNEL INPUT ============
     
-    @bot_client.on_message(filters.private & ~filters.command(["start", "setconfig", "forward", "stop", "progress", "status", "setlogo", "setlogotext", "logoposition", "logosize", "logoopacity", "enablelogo", "disablelogo", "removelogo", "logoinfo", "autoapprove", "stopapprove", "approvelist", "approveall", "cancel"]))
+    @bot_client.on_message(filters.private & ~filters.command(["start", "setconfig", "forward", "stop", "progress", "status", "setlogo", "setlogotext", "logoposition", "logosize", "logoopacity", "enablelogo", "disablelogo", "removelogo", "logoinfo", "autoapprove", "stopapprove", "approvelist", "approveall", "debugjoin", "rawtest", "cancel"]))
     async def private_message_handler(client, message):
         """Handle private messages for channel input and forward wizard"""
         user_id = message.from_user.id
