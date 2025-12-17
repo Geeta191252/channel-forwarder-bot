@@ -3703,6 +3703,19 @@ def register_bot_handlers():
                     except Exception:
                         pass
 
+                # Hard requirement for approving OLD requests: userbot session must be connected
+                if not user_clients:
+                    await status_msg.edit(
+                        "❌ **Userbot not connected**\n\n"
+                        "Old pending join requests approve karne ke liye user account (SESSION_STRING) zaroori hai.\n\n"
+                        "Fix (Koyeb env):\n"
+                        "• API_ID\n"
+                        "• API_HASH\n"
+                        "• SESSION_STRING (generate_session.py se)\n\n"
+                        "Phir redeploy karke /approveall dobara chalao."
+                    )
+                    return
+
                 # METHOD 1: Try USERBOT client (SESSION_STRING) - only user accounts can list join requests
                 userbot_worked = False
                 if user_clients:
