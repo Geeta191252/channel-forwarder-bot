@@ -3530,7 +3530,8 @@ def register_bot_handlers():
         )
 
         if not is_channel_post and user_id not in BOT_ADMINS:
-            if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and user_id is not None:
+            # Allow chat admins (group/supergroup/channel) to run it inside their own chat
+            if user_id is not None and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
                 member = await client.get_chat_member(message.chat.id, user_id)
                 if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                     await message.reply("❌ Only admins can use this command!")
