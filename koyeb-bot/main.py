@@ -36,6 +36,12 @@ user_channels_col = db["user_channels"] if db is not None else None
 # User state for channel input
 user_channel_state = {}  # {user_id: "waiting_add_channel"}
 
+# Forward wizard state
+forward_wizard_state = {}  # {user_id: {"state": "...", "source_channel": "", "source_title": "", "skip_number": 0, "last_message_id": 0}}
+
+# Active forwarding progress per user
+user_forward_progress = {}  # {user_id: {progress data...}}
+
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
 API_HASH = os.getenv("API_HASH", "")
@@ -288,6 +294,61 @@ def mark_message_forwarded(source_channel, dest_channel, message_id):
             "source_message_id": message_id,
             "forwarded_at": datetime.utcnow()
         })
+
+
+def format_forward_status(user_id):
+    """Format the forward status message"""
+    if user_id not in user_forward_progress:
+        return "No active forwarding"
+    
+    p = user_forward_progress[user_id]
+    elapsed_time = int(time.time() - p.get("started_at", time.time()))
+    
+    # Format elapsed time
+    hours = elapsed_time // 3600
+    minutes = (elapsed_time % 3600) // 60
+    seconds = elapsed_time % 60
+    elapsed_str = f"{hours}h {minutes}m {seconds}s" if hours else f"{minutes}m {seconds}s"
+    
+    return (
+        f"╔ FORWARD STATUS ╤═○:⊱\n"
+        f"┃\n"
+        f"┃-» 👷 ғᴇᴄʜᴇᴅ Msɢ : {p.get('fetched_msg', 0)}\n"
+        f"┃\n"
+        f"┃-» ✅ sᴜᴄᴄᴇssғᴜʟʟʏ Fᴡᴅ : {p.get('success_fwd', 0)}\n"
+        f"┃\n"
+        f"┃-» 👥 ᴅᴜᴘʟɪᴄᴀᴛᴇ Msɢ : {p.get('duplicate_msg', 0)}\n"
+        f"┃\n"
+        f"┃-» 🙅 Sᴋɪᴘᴘᴇᴅ Msɢ : {p.get('skipped_msg', 0)}\n"
+        f"┃\n"
+        f"┃-» 🔄 Fɪʟᴛᴇʀᴇᴅ Msɢ : {p.get('filtered_msg', 0)}\n"
+        f"┃\n"
+        f"┃-» 📊 Cᴜʀʀᴇɴᴛ Sᴛᴀᴛᴜs: {p.get('status', 'Starting')}\n"
+        f"┃\n"
+        f"┃-» ◇ Pᴇʀᴄᴇɴᴛᴀɢᴇ: {p.get('percentage', 0)} %\n"
+        f"┃\n"
+        f"┃-» 🕐 Eʟᴀᴘsᴇᴅ: {elapsed_str}\n"
+        f"┃\n"
+        f"┃-» ⏳ ETA: {p.get('eta', 'Calculating...')}\n"
+        f"╚═ ᴘʀᴏɢʀᴇssɪɴɢ ╧═○:⊱"
+    )
+
+
+def format_eta(seconds):
+    """Format ETA from seconds"""
+    if seconds <= 0:
+        return "Almost done..."
+    
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m"
+    elif hours > 0:
+        return f"{hours}h {minutes}m"
+    else:
+        return f"{minutes}m"
 
 
 def get_next_client():
@@ -599,6 +660,132 @@ async def forward_messages(source_channel, dest_channel, start_id, end_id, is_re
         print("✅ Forwarding completed!")
 
 
+async def wizard_forward_messages(user_id, source_channel, dest_channel, skip_number, last_message_id, bot_client):
+    """Forward messages using wizard flow with live status updates"""
+    global user_forward_progress
+    
+    if user_id not in user_forward_progress:
+        return
+    
+    progress = user_forward_progress[user_id]
+    progress["status"] = "Forwarding"
+    
+    client = get_next_client()
+    if not client:
+        progress["status"] = "Error: No accounts"
+        progress["is_active"] = False
+        return
+    
+    try:
+        # Calculate start message ID (skip specified number)
+        start_id = 1 + skip_number
+        end_id = last_message_id
+        total_to_forward = end_id - start_id + 1
+        
+        if total_to_forward <= 0:
+            progress["status"] = "Completed"
+            progress["percentage"] = 100
+            progress["is_active"] = False
+            return
+        
+        current_id = start_id
+        update_counter = 0
+        batch_start_time = time.time()
+        forwarded_count = 0
+        
+        while current_id <= end_id and progress.get("is_active", False):
+            # Forward single message
+            try:
+                # Check if already forwarded
+                if is_message_forwarded(source_channel, current_id):
+                    progress["duplicate_msg"] = progress.get("duplicate_msg", 0) + 1
+                    current_id += 1
+                    continue
+                
+                # Try to copy message
+                await client.copy_message(
+                    chat_id=dest_channel,
+                    from_chat_id=source_channel,
+                    message_id=current_id
+                )
+                
+                progress["success_fwd"] = progress.get("success_fwd", 0) + 1
+                mark_message_forwarded(source_channel, dest_channel, current_id)
+                forwarded_count += 1
+                
+            except FloodWait as e:
+                progress["status"] = f"Waiting {e.value}s"
+                await asyncio.sleep(e.value)
+                continue
+            except Exception as e:
+                error_str = str(e).lower()
+                if "message" in error_str and "not found" in error_str:
+                    progress["filtered_msg"] = progress.get("filtered_msg", 0) + 1
+                else:
+                    progress["duplicate_msg"] = progress.get("duplicate_msg", 0) + 1
+            
+            current_id += 1
+            
+            # Calculate progress
+            done = current_id - start_id
+            progress["percentage"] = round((done / total_to_forward) * 100, 1)
+            
+            # Calculate ETA
+            elapsed = time.time() - batch_start_time
+            if forwarded_count > 0:
+                rate = forwarded_count / elapsed  # messages per second
+                remaining = end_id - current_id
+                if rate > 0:
+                    eta_seconds = remaining / rate
+                    progress["eta"] = format_eta(int(eta_seconds))
+            
+            progress["status"] = "Forwarding"
+            
+            # Update status message every 5 forwards
+            update_counter += 1
+            if update_counter >= 5:
+                update_counter = 0
+                try:
+                    cancel_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("• CANCEL", callback_data="cancel_fwd_active")]
+                    ])
+                    await bot_client.edit_message_text(
+                        chat_id=progress.get("chat_id"),
+                        message_id=progress.get("status_message_id"),
+                        text=format_forward_status(user_id),
+                        reply_markup=cancel_keyboard
+                    )
+                except:
+                    pass
+            
+            # Small delay between messages
+            await asyncio.sleep(0.3)
+        
+        # Final update
+        progress["status"] = "Completed" if progress.get("is_active") else "Cancelled"
+        progress["percentage"] = 100 if progress.get("is_active") else progress.get("percentage", 0)
+        progress["is_active"] = False
+        progress["eta"] = "Done!"
+        
+        try:
+            await bot_client.edit_message_text(
+                chat_id=progress.get("chat_id"),
+                message_id=progress.get("status_message_id"),
+                text=format_forward_status(user_id)
+            )
+        except:
+            pass
+        
+    except Exception as e:
+        print(f"Wizard forward error: {e}")
+        progress["status"] = f"Error: {str(e)[:20]}"
+        progress["is_active"] = False
+    
+    finally:
+        # Clean up wizard state
+        forward_wizard_state.pop(user_id, None)
+
+
 async def init_clients():
     """Initialize Pyrogram clients - supports unlimited accounts!"""
     global user_clients, bot_client, auto_approve_channels
@@ -698,12 +885,33 @@ def register_bot_handlers():
         data = callback_query.data
         
         if data == "forward":
+            user_id = callback_query.from_user.id
+            
+            # Check if user has accounts connected
+            if not user_clients:
+                await callback_query.message.reply("❌ No user accounts connected!")
+                return
+            
+            # Start forward wizard - Set source chat
+            forward_wizard_state[user_id] = {
+                "state": "waiting_source",
+                "source_channel": "",
+                "source_title": "",
+                "skip_number": 0,
+                "last_message_id": 0,
+                "dest_channel": "",
+                "dest_title": ""
+            }
+            
+            cancel_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")]
+            ])
+            
             await callback_query.message.reply(
-                "📤 **Forward Messages**\n\n"
-                "1️⃣ Set config: /setconfig <source> <dest>\n"
-                "2️⃣ Start: /forward <start_id> <end_id>\n"
-                "3️⃣ Resume: /resume\n"
-                "4️⃣ Stop: /stop"
+                "**( SET SOURCE CHAT )**\n\n"
+                "Forward the last message or last message link of source chat.\n"
+                "/cancel - cancel this process",
+                reply_markup=cancel_keyboard
             )
         elif data == "channel":
             # Get user's saved channels
@@ -888,6 +1096,80 @@ def register_bot_handlers():
                 "/blockbadwords - Block bad content\n"
                 "/modstatus - View settings"
             )
+        elif data == "cancel_forward":
+            user_id = callback_query.from_user.id
+            forward_wizard_state.pop(user_id, None)
+            await callback_query.message.reply("❌ Forwarding cancelled!")
+        elif data.startswith("select_dest_"):
+            # User selected a destination channel
+            user_id = callback_query.from_user.id
+            channel_idx = int(data.replace("select_dest_", ""))
+            
+            if user_id not in forward_wizard_state:
+                await callback_query.message.reply("❌ Session expired. Please start again.")
+                return
+            
+            # Get user's channels
+            user_channels = []
+            if user_channels_col is not None:
+                saved = user_channels_col.find({"user_id": user_id})
+                user_channels = [c.get("channel") for c in saved if c.get("channel")]
+            
+            if channel_idx >= len(user_channels):
+                await callback_query.message.reply("❌ Invalid channel!")
+                return
+            
+            dest_channel = user_channels[channel_idx]
+            wizard = forward_wizard_state[user_id]
+            wizard["dest_channel"] = dest_channel
+            wizard["dest_title"] = dest_channel
+            wizard["state"] = "forwarding"
+            
+            # Initialize progress tracking for this user
+            user_forward_progress[user_id] = {
+                "fetched_msg": wizard["last_message_id"],
+                "success_fwd": 0,
+                "duplicate_msg": 0,
+                "skipped_msg": wizard["skip_number"],
+                "filtered_msg": 0,
+                "status": "Starting",
+                "percentage": 0,
+                "elapsed": 0,
+                "eta": "Calculating...",
+                "is_active": True,
+                "started_at": time.time(),
+                "status_message_id": None
+            }
+            
+            # Send initial status message
+            cancel_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("• CANCEL", callback_data="cancel_fwd_active")]
+            ])
+            
+            status_msg = await callback_query.message.reply(
+                format_forward_status(user_id),
+                reply_markup=cancel_keyboard
+            )
+            
+            user_forward_progress[user_id]["status_message_id"] = status_msg.id
+            user_forward_progress[user_id]["chat_id"] = callback_query.message.chat.id
+            
+            # Start forwarding in background
+            asyncio.create_task(wizard_forward_messages(
+                user_id,
+                wizard["source_channel"],
+                dest_channel,
+                wizard["skip_number"],
+                wizard["last_message_id"],
+                client
+            ))
+        elif data == "cancel_fwd_active":
+            user_id = callback_query.from_user.id
+            if user_id in user_forward_progress:
+                user_forward_progress[user_id]["is_active"] = False
+                user_forward_progress[user_id]["status"] = "Cancelled"
+            forward_wizard_state.pop(user_id, None)
+            await callback_query.message.reply("🛑 Forwarding cancelled!")
         
         await callback_query.answer()
     
@@ -1430,14 +1712,104 @@ def register_bot_handlers():
     
     # ============ PRIVATE MESSAGE HANDLER FOR CHANNEL INPUT ============
     
-    @bot_client.on_message(filters.private & ~filters.command(["start", "setconfig", "forward", "stop", "progress", "status", "setlogo", "setlogotext", "logoposition", "logosize", "logoopacity", "enablelogo", "disablelogo", "removelogo", "logoinfo", "autoapprove", "stopapprove", "approvelist", "approveall"]))
+    @bot_client.on_message(filters.private & ~filters.command(["start", "setconfig", "forward", "stop", "progress", "status", "setlogo", "setlogotext", "logoposition", "logosize", "logoopacity", "enablelogo", "disablelogo", "removelogo", "logoinfo", "autoapprove", "stopapprove", "approvelist", "approveall", "cancel"]))
     async def private_message_handler(client, message):
-        """Handle private messages for channel input"""
+        """Handle private messages for channel input and forward wizard"""
         user_id = message.from_user.id
         
-        # Check if user is in "waiting_add_channel" state
+        # ====== FORWARD WIZARD HANDLERS ======
+        wizard = forward_wizard_state.get(user_id)
+        if wizard:
+            state = wizard.get("state")
+            
+            # Handle "waiting_source" - User forwards a message from source channel
+            if state == "waiting_source":
+                source_channel = None
+                source_title = "Unknown"
+                last_message_id = 0
+                
+                # Check if it's a forwarded message
+                if message.forward_from_chat:
+                    source_channel = message.forward_from_chat.id
+                    source_title = message.forward_from_chat.title or str(source_channel)
+                    last_message_id = message.forward_from_message_id or 0
+                elif message.text:
+                    # Try to extract from t.me link
+                    import re
+                    link_match = re.search(r't\.me/([a-zA-Z0-9_]+)/(\d+)', message.text)
+                    if link_match:
+                        source_channel = "@" + link_match.group(1)
+                        source_title = source_channel
+                        last_message_id = int(link_match.group(2))
+                
+                if not source_channel or not last_message_id:
+                    await message.reply(
+                        "❌ Could not detect source channel.\n\n"
+                        "Please forward a message from the source channel or send a message link."
+                    )
+                    return
+                
+                wizard["source_channel"] = source_channel
+                wizard["source_title"] = source_title
+                wizard["last_message_id"] = last_message_id
+                wizard["state"] = "waiting_skip"
+                
+                cancel_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")]
+                ])
+                
+                await message.reply(
+                    f"**( SET MESSAGE SKIPPING NUMBER )**\n\n"
+                    f"Skip the message as much as you enter the number and the rest of the message will be forwarded\n"
+                    f"Default Skip Number = 0\n"
+                    f"eg: You enter 0 = 0 message skiped\n"
+                    f"You enter 5 = 5 message skiped\n"
+                    f"/cancel - cancel this process",
+                    reply_markup=cancel_keyboard
+                )
+                return
+            
+            # Handle "waiting_skip" - User enters skip number
+            elif state == "waiting_skip":
+                try:
+                    skip_number = int(message.text.strip())
+                    if skip_number < 0:
+                        skip_number = 0
+                except:
+                    skip_number = 0
+                
+                wizard["skip_number"] = skip_number
+                wizard["state"] = "waiting_dest"
+                
+                # Get user's saved channels
+                user_channels = []
+                if user_channels_col is not None:
+                    saved = user_channels_col.find({"user_id": user_id})
+                    user_channels = [c.get("channel") for c in saved if c.get("channel")]
+                
+                if not user_channels:
+                    await message.reply(
+                        "❌ No destination channels saved!\n\n"
+                        "Please add channels first using:\n"
+                        "/start → 📢 Channel → Add Channel"
+                    )
+                    forward_wizard_state.pop(user_id, None)
+                    return
+                
+                # Create buttons for each channel
+                buttons = [[InlineKeyboardButton(f"📁 {ch}", callback_data=f"select_dest_{i}")] for i, ch in enumerate(user_channels[:10])]
+                buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_forward")])
+                
+                await message.reply(
+                    f"**( SELECT DESTINATION CHAT )**\n\n"
+                    f"Select a channel from your saved channels:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+                return
+        
+        # ====== CHANNEL INPUT HANDLER ======
         if user_channel_state.get(user_id) == "waiting_add_channel":
-            channel_input = message.text.strip()
+            channel_input = message.text.strip() if message.text else ""
             
             # Validate and clean channel input
             if channel_input.startswith("https://t.me/"):
@@ -1470,6 +1842,29 @@ def register_bot_handlers():
             # Clear state
             user_channel_state.pop(user_id, None)
             return
+    
+    # ============ CANCEL COMMAND ============
+    
+    @bot_client.on_message(filters.private & filters.command("cancel"))
+    async def cancel_handler(client, message):
+        """Cancel any active wizard"""
+        user_id = message.from_user.id
+        
+        cancelled = False
+        if user_id in forward_wizard_state:
+            forward_wizard_state.pop(user_id)
+            cancelled = True
+        if user_id in user_channel_state:
+            user_channel_state.pop(user_id)
+            cancelled = True
+        if user_id in user_forward_progress:
+            user_forward_progress[user_id]["is_active"] = False
+            cancelled = True
+        
+        if cancelled:
+            await message.reply("❌ Process cancelled!")
+        else:
+            await message.reply("No active process to cancel.")
     
     # ============ CONTENT MODERATION MESSAGE FILTER ============
     
