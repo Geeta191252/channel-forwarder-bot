@@ -435,16 +435,17 @@ def register_bot_handlers():
             channels_list = "\n".join([f"• `{ch}`" for ch in auto_approve_channels]) if auto_approve_channels else "None"
             await callback_query.message.reply(
                 "📥 **Join Request Auto-Approve**\n\n"
+                "📢 Works for both **Channels & Groups**!\n\n"
                 f"**Status:** {'🟢 Active' if auto_approve_channels else '🔴 Inactive'}\n"
-                f"**Channels:** {len(auto_approve_channels)}\n"
+                f"**Total:** {len(auto_approve_channels)}\n"
                 f"✅ Approved: {auto_approve_stats['approved']}\n"
                 f"❌ Failed: {auto_approve_stats['failed']}\n\n"
-                f"**Active Channels:**\n{channels_list}\n\n"
+                f"**Active Channels/Groups:**\n{channels_list}\n\n"
                 "**Commands:**\n"
-                "/autoapprove <channel> - Enable auto-approve\n"
-                "/stopapprove <channel> - Disable auto-approve\n"
-                "/approveall <channel> - Accept all pending requests\n"
-                "/approvelist - Show all auto-approve channels"
+                "/autoapprove <channel/group> - Enable\n"
+                "/stopapprove <channel/group> - Disable\n"
+                "/approveall <channel/group> - Accept all pending\n"
+                "/approvelist - Show all enabled"
             )
         elif data == "file_logo":
             await callback_query.message.reply(
@@ -626,11 +627,17 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("autoapprove"))
     async def autoapprove_handler(client, message):
-        """Enable auto-approve for a channel"""
+        """Enable auto-approve for a channel/group"""
         try:
             parts = message.text.split()
             if len(parts) != 2:
-                await message.reply("Usage: /autoapprove <channel>\nExample: /autoapprove @mychannel")
+                await message.reply(
+                    "Usage: /autoapprove <channel/group>\n\n"
+                    "Examples:\n"
+                    "• /autoapprove @mychannel\n"
+                    "• /autoapprove @mygroup\n"
+                    "• /autoapprove -1001234567890"
+                )
                 return
             
             channel = parts[1]
@@ -646,6 +653,7 @@ def register_bot_handlers():
             
             await message.reply(
                 f"✅ Auto-approve enabled for: {channel}\n\n"
+                f"📢 Works for both Channels & Groups!\n"
                 f"All join requests will be automatically approved!\n"
                 f"Use /stopapprove {channel} to disable."
             )
@@ -654,11 +662,11 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("stopapprove"))
     async def stopapprove_handler(client, message):
-        """Disable auto-approve for a channel"""
+        """Disable auto-approve for a channel/group"""
         try:
             parts = message.text.split()
             if len(parts) != 2:
-                await message.reply("Usage: /stopapprove <channel>")
+                await message.reply("Usage: /stopapprove <channel/group>")
                 return
             
             channel = parts[1]
@@ -677,14 +685,14 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("approvelist"))
     async def approvelist_handler(client, message):
-        """List all auto-approve channels"""
+        """List all auto-approve channels/groups"""
         if not auto_approve_channels:
-            await message.reply("📥 No auto-approve channels configured.\n\nUse /autoapprove <channel> to enable.")
+            await message.reply("📥 No auto-approve channels/groups configured.\n\nUse /autoapprove <channel/group> to enable.")
             return
         
         channels_list = "\n".join([f"• {ch}" for ch in auto_approve_channels])
         await message.reply(
-            f"📥 **Auto-Approve Channels ({len(auto_approve_channels)})**\n\n"
+            f"📥 **Auto-Approve Channels/Groups ({len(auto_approve_channels)})**\n\n"
             f"{channels_list}\n\n"
             f"✅ Approved: {auto_approve_stats['approved']}\n"
             f"❌ Failed: {auto_approve_stats['failed']}"
@@ -692,7 +700,7 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("approveall"))
     async def approveall_handler(client, message):
-        """Approve all pending join requests for a channel"""
+        """Approve all pending join requests for a channel/group"""
         global auto_approve_stats
         
         if not user_clients:
@@ -702,7 +710,13 @@ def register_bot_handlers():
         try:
             parts = message.text.split()
             if len(parts) != 2:
-                await message.reply("Usage: /approveall <channel>\nExample: /approveall @mychannel")
+                await message.reply(
+                    "Usage: /approveall <channel/group>\n\n"
+                    "Examples:\n"
+                    "• /approveall @mychannel\n"
+                    "• /approveall @mygroup\n"
+                    "• /approveall -1001234567890"
+                )
                 return
             
             channel = parts[1]
