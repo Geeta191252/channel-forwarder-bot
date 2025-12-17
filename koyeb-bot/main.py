@@ -3954,6 +3954,69 @@ def register_bot_handlers():
             auto_approve_stats["failed"] += 1
             print(f"❌ Failed to auto-approve: {e}")
 
+    @bot_client.on_message(filters.command("rawtest"))
+    async def rawtest_handler(client, message):
+        """Raw API test for debugging - shows exact responses"""
+        import aiohttp
+        try:
+            parts = (message.text or "").split()
+            if len(parts) < 2:
+                await message.reply("Usage: /rawtest <chat_id>\nExample: /rawtest -1002926855756")
+                return
+
+            chat_id = parts[1]
+            if not BOT_TOKEN:
+                await message.reply("❌ BOT_TOKEN missing!")
+                return
+
+            base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+            results = []
+
+            async with aiohttp.ClientSession() as session:
+                # 1. getMe
+                async with session.get(f"{base_url}/getMe") as r:
+                    me_status = r.status
+                    try:
+                        me_data = await r.json()
+                    except:
+                        me_data = {"raw": (await r.text())[:200]}
+                results.append(f"**1. getMe** (status={me_status}):\n```{str(me_data)[:300]}```")
+
+                bot_id = (me_data.get("result") or {}).get("id") if isinstance(me_data, dict) else None
+
+                # 2. getChat
+                async with session.get(f"{base_url}/getChat", params={"chat_id": chat_id}) as r:
+                    gc_status = r.status
+                    try:
+                        gc_data = await r.json()
+                    except:
+                        gc_data = {"raw": (await r.text())[:200]}
+                results.append(f"**2. getChat** (status={gc_status}):\n```{str(gc_data)[:400]}```")
+
+                # 3. getChatMember (bot)
+                if bot_id:
+                    async with session.get(f"{base_url}/getChatMember", params={"chat_id": chat_id, "user_id": bot_id}) as r:
+                        gm_status = r.status
+                        try:
+                            gm_data = await r.json()
+                        except:
+                            gm_data = {"raw": (await r.text())[:200]}
+                    results.append(f"**3. getChatMember(bot)** (status={gm_status}):\n```{str(gm_data)[:400]}```")
+
+                # 4. getChatJoinRequests
+                async with session.get(f"{base_url}/getChatJoinRequests", params={"chat_id": chat_id, "limit": 5}) as r:
+                    jr_status = r.status
+                    try:
+                        jr_data = await r.json()
+                    except:
+                        jr_data = {"raw": (await r.text())[:200]}
+                results.append(f"**4. getChatJoinRequests** (status={jr_status}):\n```{str(jr_data)[:400]}```")
+
+            await message.reply("🔬 **Raw API Test Results**\n\n" + "\n\n".join(results), parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            await message.reply(f"❌ rawtest error: {e}")
+
 
 # Flask routes for health checks
 @flask_app.route("/")
