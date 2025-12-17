@@ -31,6 +31,10 @@ autoapprove_col = db["auto_approve"] if db is not None else None
 logo_col = db["logo_config"] if db is not None else None
 moderation_col = db["group_moderation"] if db is not None else None
 warnings_col = db["user_warnings"] if db is not None else None
+user_channels_col = db["user_channels"] if db is not None else None
+
+# User state for channel input
+user_channel_state = {}  # {user_id: "waiting_add_channel"}
 
 # User account credentials (MTProto)
 API_ID = os.getenv("API_ID", "")
@@ -702,10 +706,96 @@ def register_bot_handlers():
                 "4️⃣ Stop: /stop"
             )
         elif data == "channel":
+            # Get user's saved channels
+            user_id = callback_query.from_user.id
+            user_channels = []
+            if user_channels_col is not None:
+                saved = user_channels_col.find({"user_id": user_id})
+                user_channels = [c.get("channel") for c in saved if c.get("channel")]
+            
+            channels_text = "\n".join([f"• `{ch}`" for ch in user_channels]) if user_channels else "No channels added yet"
+            
+            channel_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Add Channel ➕", callback_data="add_channel")],
+                [InlineKeyboardButton("🗑️ Remove Channel", callback_data="remove_channel")],
+                [InlineKeyboardButton("back", callback_data="back_main")]
+            ])
+            
             await callback_query.message.reply(
-                "📢 **Channel Setup**\n\n"
-                "Use /setconfig to set source and destination channels.\n"
-                "Example: /setconfig @source_channel @dest_channel"
+                f"📢 **My Channels**\n\n"
+                f"you can manage your target chats in here\n\n"
+                f"**Your Channels ({len(user_channels)}):**\n{channels_text}",
+                reply_markup=channel_keyboard
+            )
+        elif data == "add_channel":
+            user_id = callback_query.from_user.id
+            user_channel_state[user_id] = "waiting_add_channel"
+            await callback_query.message.reply(
+                "📢 **Add Channel**\n\n"
+                "Send me the channel/chat username or link:\n\n"
+                "Examples:\n"
+                "• @channelname\n"
+                "• https://t.me/channelname\n"
+                "• -1001234567890\n\n"
+                "Just send the message below 👇"
+            )
+        elif data == "remove_channel":
+            user_id = callback_query.from_user.id
+            user_channels = []
+            if user_channels_col is not None:
+                saved = user_channels_col.find({"user_id": user_id})
+                user_channels = [c.get("channel") for c in saved if c.get("channel")]
+            
+            if not user_channels:
+                await callback_query.message.reply("❌ No channels to remove!")
+                return
+            
+            # Create buttons for each channel to remove
+            buttons = [[InlineKeyboardButton(f"🗑️ {ch}", callback_data=f"del_ch_{ch}")] for ch in user_channels[:10]]
+            buttons.append([InlineKeyboardButton("back", callback_data="channel")])
+            
+            await callback_query.message.reply(
+                "🗑️ **Remove Channel**\n\n"
+                "Select a channel to remove:",
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        elif data.startswith("del_ch_"):
+            channel_to_delete = data.replace("del_ch_", "")
+            user_id = callback_query.from_user.id
+            
+            if user_channels_col is not None:
+                user_channels_col.delete_one({"user_id": user_id, "channel": channel_to_delete})
+            
+            await callback_query.message.reply(f"✅ Channel `{channel_to_delete}` removed!")
+        elif data == "back_main":
+            # Go back to main menu
+            num_accounts = len(user_clients)
+            expected_speed = num_accounts * 30 if num_accounts else 0
+            
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📤 Forward", callback_data="forward"),
+                    InlineKeyboardButton("📢 Channel", callback_data="channel")
+                ],
+                [
+                    InlineKeyboardButton("🛡️ Moderation", callback_data="moderation"),
+                    InlineKeyboardButton("🆘 @Admin", callback_data="admin")
+                ],
+                [
+                    InlineKeyboardButton("📥 Join Request", callback_data="join_request"),
+                    InlineKeyboardButton("📁 File Logo", callback_data="file_logo")
+                ],
+                [
+                    InlineKeyboardButton("❓ Help", callback_data="help")
+                ]
+            ])
+            
+            await callback_query.message.reply(
+                f"🚀 **Telegram Forwarder Bot**\n\n"
+                f"👥 Connected accounts: {num_accounts}\n"
+                f"⚡ Expected speed: ~{expected_speed} msg/min\n\n"
+                "Select an option below:",
+                reply_markup=keyboard
             )
         elif data == "moderation":
             await callback_query.message.reply(
@@ -1337,6 +1427,49 @@ def register_bot_handlers():
             f"⚠️ Total warnings: {moderation_stats['warnings']}\n"
             f"🔨 Auto-bans: {moderation_stats['bans']}"
         )
+    
+    # ============ PRIVATE MESSAGE HANDLER FOR CHANNEL INPUT ============
+    
+    @bot_client.on_message(filters.private & ~filters.command(["start", "setconfig", "forward", "stop", "progress", "status", "setlogo", "setlogotext", "logoposition", "logosize", "logoopacity", "enablelogo", "disablelogo", "removelogo", "logoinfo", "autoapprove", "stopapprove", "approvelist", "approveall"]))
+    async def private_message_handler(client, message):
+        """Handle private messages for channel input"""
+        user_id = message.from_user.id
+        
+        # Check if user is in "waiting_add_channel" state
+        if user_channel_state.get(user_id) == "waiting_add_channel":
+            channel_input = message.text.strip()
+            
+            # Validate and clean channel input
+            if channel_input.startswith("https://t.me/"):
+                channel_input = "@" + channel_input.replace("https://t.me/", "").split("/")[0]
+            elif channel_input.startswith("t.me/"):
+                channel_input = "@" + channel_input.replace("t.me/", "").split("/")[0]
+            elif not channel_input.startswith("@") and not channel_input.startswith("-"):
+                channel_input = "@" + channel_input
+            
+            # Save to database
+            if user_channels_col is not None:
+                # Check if channel already exists for this user
+                existing = user_channels_col.find_one({"user_id": user_id, "channel": channel_input})
+                if existing:
+                    await message.reply(f"⚠️ Channel `{channel_input}` is already added!")
+                else:
+                    user_channels_col.insert_one({
+                        "user_id": user_id,
+                        "channel": channel_input,
+                        "added_at": datetime.utcnow()
+                    })
+                    await message.reply(
+                        f"✅ **Channel Added!**\n\n"
+                        f"Channel: `{channel_input}`\n\n"
+                        "Use /start → Channel to see all your channels."
+                    )
+            else:
+                await message.reply(f"✅ Channel `{channel_input}` noted! (DB not connected)")
+            
+            # Clear state
+            user_channel_state.pop(user_id, None)
+            return
     
     # ============ CONTENT MODERATION MESSAGE FILTER ============
     
