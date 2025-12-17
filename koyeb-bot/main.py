@@ -3575,30 +3575,42 @@ def register_bot_handlers():
                 
                 async with aiohttp.ClientSession() as session:
                     # Get pending join requests using Bot API
-                    offset = None
+                    # Telegram Bot API uses offset_date + offset_user_id pagination (not "offset").
+                    offset_date = None
+                    offset_user_id = None
+
                     while True:
                         params = {"chat_id": chat_id, "limit": 100}
-                        if offset:
-                            params["offset"] = offset
-                        
+                        if offset_date is not None:
+                            params["offset_date"] = offset_date
+                        if offset_user_id is not None:
+                            params["offset_user_id"] = offset_user_id
+
                         async with session.get(f"{base_url}/getChatJoinRequests", params=params) as resp:
                             data = await resp.json()
-                            
+
                             if not data.get("ok"):
                                 error_desc = data.get("description", "Unknown error")
                                 if "CHAT_ADMIN_REQUIRED" in error_desc or "not enough rights" in error_desc.lower():
                                     await status_msg.edit(
                                         f"❌ **Bot needs admin permissions!**\n\n"
-                                        f"Make the bot admin in {channel} with:\n"
-                                        f"• ✅ Invite Users via Link"
+                                        f"Make the bot admin in {channel} and allow:\n"
+                                        f"• ✅ Invite Users via Link / Add Users\n"
+                                        f"• ✅ Manage Chat (recommended)"
+                                    )
+                                    return
+                                if "chat not found" in error_desc.lower():
+                                    await status_msg.edit(
+                                        f"❌ **Chat not found / bot not added**\n\n"
+                                        f"Add the bot as admin in {channel} first, then try again."
                                     )
                                     return
                                 raise Exception(error_desc)
-                            
-                            requests = data.get("result", [])
+
+                            requests = data.get("result") or []
                             if not requests:
                                 break
-                            
+
                             for req in requests:
                                 user_id = req.get("user", {}).get("id")
                                 if user_id:
@@ -3631,9 +3643,11 @@ def register_bot_handlers():
                             # Check if there are more requests
                             if len(requests) < 100:
                                 break
-                            # Use last user as offset for pagination
-                            last_user = requests[-1].get("user", {})
-                            offset = last_user.get("id")
+
+                            # Pagination: continue after the last request returned
+                            last_req = requests[-1]
+                            offset_date = last_req.get("date")
+                            offset_user_id = (last_req.get("user") or {}).get("id")
                 
                 await status_msg.edit(
                     f"✅ **Approval Complete!**\n\n"
