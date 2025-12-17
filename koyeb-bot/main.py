@@ -3163,6 +3163,16 @@ def register_bot_handlers():
         else:
             await message.reply("No active process to cancel.")
     
+    # ============ AUTO DELETE HELPER ============
+    
+    async def auto_delete_message(msg, delay_seconds=10):
+        """Delete a message after specified delay"""
+        try:
+            await asyncio.sleep(delay_seconds)
+            await msg.delete()
+        except Exception as e:
+            print(f"Failed to auto-delete message: {e}")
+    
     # ============ CONTENT MODERATION MESSAGE FILTER ============
     
     @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "modstatus", "warnings", "resetwarnings"]))
@@ -3222,12 +3232,14 @@ def register_bot_handlers():
                 try:
                     await client.ban_chat_member(chat_id, user_id)
                     moderation_stats["bans"] += 1
-                    await client.send_message(
+                    ban_msg = await client.send_message(
                         chat_id,
                         f"🚫 **Auto-Ban:** {user_name}\n"
                         f"Reason: {MAX_WARNINGS} warnings exceeded\n"
                         f"Last violation: {reason}"
                     )
+                    # Auto-delete ban message after 10 seconds
+                    asyncio.create_task(auto_delete_message(ban_msg, 10))
                     # Reset warnings after ban
                     user_warnings[key] = 0
                     if warnings_col is not None:
@@ -3241,12 +3253,14 @@ def register_bot_handlers():
             else:
                 # Send warning message
                 remaining = MAX_WARNINGS - current_warnings
-                await client.send_message(
+                warn_msg = await client.send_message(
                     chat_id,
                     f"⚠️ **Warning {current_warnings}/{MAX_WARNINGS}:** {user_name}\n"
                     f"Reason: {reason}\n"
                     f"⛔ {remaining} more warning{'s' if remaining > 1 else ''} = Auto-Ban!"
                 )
+                # Auto-delete warning message after 10 seconds
+                asyncio.create_task(auto_delete_message(warn_msg, 10))
         
         try:
             # Check for forwarded messages
