@@ -3751,28 +3751,51 @@ def register_bot_handlers():
                         "Phir redeploy karke /approveall dobara chalao."
                     )
                     return
+                
+                # BATCH SIZE for parallel processing
+                BATCH_SIZE = 20
+                
                 # METHOD 1: Try USERBOT client (SESSION_STRING) - only user accounts can list join requests
                 userbot_worked = False
                 if user_clients:
                     userbot_name, userbot = user_clients[0]  # Use first userbot
                     try:
-                        await status_msg.edit(f"🔄 Method 1: Userbot ({userbot_name})...\n{channel}")
+                        await status_msg.edit(f"🔄 Method 1: Userbot ({userbot_name})...\n{channel}\n⚡ Batch mode: {BATCH_SIZE} at once")
+                        
+                        # Collect all pending requests first
+                        pending_users = []
                         async for join_request in userbot.get_chat_join_requests(chat_id):
-                            try:
-                                await userbot.approve_chat_join_request(chat_id, join_request.user.id)
-                                approved += 1
-                                auto_approve_stats["approved"] += 1
+                            pending_users.append(join_request.user.id)
+                        
+                        if pending_users:
+                            await status_msg.edit(f"🔄 Found {len(pending_users)} pending requests\n⚡ Processing in batches of {BATCH_SIZE}...")
+                            
+                            # Process in batches
+                            async def approve_user(uid):
+                                try:
+                                    await userbot.approve_chat_join_request(chat_id, uid)
+                                    return ("success", uid)
+                                except Exception as e:
+                                    return ("failed", uid, str(e))
+                            
+                            for i in range(0, len(pending_users), BATCH_SIZE):
+                                batch = pending_users[i:i + BATCH_SIZE]
+                                results = await asyncio.gather(*[approve_user(uid) for uid in batch], return_exceptions=True)
                                 
-                                if approved % 20 == 0:
-                                    try:
-                                        await status_msg.edit(f"🔄 Approving (Userbot)...\n✅ {approved} | ❌ {failed}")
-                                    except:
-                                        pass
-                                await asyncio.sleep(0.2)
-                            except Exception as e:
-                                failed += 1
-                                auto_approve_stats["failed"] += 1
-                                print(f"Failed to approve {join_request.user.id}: {e}")
+                                for r in results:
+                                    if isinstance(r, tuple) and r[0] == "success":
+                                        approved += 1
+                                        auto_approve_stats["approved"] += 1
+                                    else:
+                                        failed += 1
+                                        auto_approve_stats["failed"] += 1
+                                
+                                try:
+                                    await status_msg.edit(f"🔄 Approving (Userbot)...\n✅ {approved} | ❌ {failed}\n📊 {approved + failed}/{len(pending_users)}")
+                                except:
+                                    pass
+                                await asyncio.sleep(0.5)  # Small delay between batches to avoid rate limits
+                        
                         userbot_worked = True
                     except Exception as e:
                         print(f"Userbot get_chat_join_requests failed: {e}")
@@ -3786,8 +3809,10 @@ def register_bot_handlers():
                     if bot_token:
                         base_url = f"https://api.telegram.org/bot{bot_token}"
                         try:
-                            await status_msg.edit(f"🔄 Method 2: Bot API...\n{channel}")
+                            await status_msg.edit(f"🔄 Method 2: Bot API...\n{channel}\n⚡ Batch mode: {BATCH_SIZE} at once")
                             async with aiohttp.ClientSession() as session:
+                                # First collect all pending user IDs
+                                all_pending_users = []
                                 offset_date = None
                                 offset_user_id = None
                                 api_worked = False
@@ -3812,28 +3837,44 @@ def register_bot_handlers():
                                         for req in requests:
                                             uid = req.get("user", {}).get("id")
                                             if uid:
-                                                try:
-                                                    async with session.post(f"{base_url}/approveChatJoinRequest", data={"chat_id": chat_id, "user_id": uid}) as ar:
-                                                        ad = await ar.json()
-                                                        if ad.get("ok"):
-                                                            approved += 1
-                                                            auto_approve_stats["approved"] += 1
-                                                        else:
-                                                            failed += 1
-                                                    if approved % 20 == 0:
-                                                        try:
-                                                            await status_msg.edit(f"🔄 Approving (API)...\n✅ {approved} | ❌ {failed}")
-                                                        except:
-                                                            pass
-                                                    await asyncio.sleep(0.2)
-                                                except:
-                                                    failed += 1
+                                                all_pending_users.append(uid)
 
                                         if len(requests) < 100:
                                             break
                                         last_req = requests[-1]
                                         offset_date = last_req.get("date")
                                         offset_user_id = (last_req.get("user") or {}).get("id")
+
+                                if api_worked and all_pending_users:
+                                    await status_msg.edit(f"🔄 Found {len(all_pending_users)} pending requests\n⚡ Processing in batches of {BATCH_SIZE}...")
+                                    
+                                    # Process in batches
+                                    async def approve_user_api(uid):
+                                        try:
+                                            async with session.post(f"{base_url}/approveChatJoinRequest", data={"chat_id": chat_id, "user_id": uid}) as ar:
+                                                ad = await ar.json()
+                                                if ad.get("ok"):
+                                                    return ("success", uid)
+                                                return ("failed", uid)
+                                        except:
+                                            return ("failed", uid)
+                                    
+                                    for i in range(0, len(all_pending_users), BATCH_SIZE):
+                                        batch = all_pending_users[i:i + BATCH_SIZE]
+                                        results = await asyncio.gather(*[approve_user_api(uid) for uid in batch], return_exceptions=True)
+                                        
+                                        for r in results:
+                                            if isinstance(r, tuple) and r[0] == "success":
+                                                approved += 1
+                                                auto_approve_stats["approved"] += 1
+                                            else:
+                                                failed += 1
+                                        
+                                        try:
+                                            await status_msg.edit(f"🔄 Approving (API)...\n✅ {approved} | ❌ {failed}\n📊 {approved + failed}/{len(all_pending_users)}")
+                                        except:
+                                            pass
+                                        await asyncio.sleep(0.5)  # Small delay between batches
 
                                 if not api_worked:
                                     raise Exception("Bot API getChatJoinRequests not available")
@@ -3843,35 +3884,47 @@ def register_bot_handlers():
                 # METHOD 3: Fallback - approve from stored pending requests in DB
                 if approved == 0 and failed == 0 and pending_join_requests_col is not None:
                     try:
-                        await status_msg.edit(f"🔄 Method 3: DB fallback...\n{channel}")
+                        await status_msg.edit(f"🔄 Method 3: DB fallback...\n{channel}\n⚡ Batch mode: {BATCH_SIZE} at once")
                         pending = list(pending_join_requests_col.find({"chat_id": str(chat_id), "approved": False}).limit(500))
                         if pending:
-                            for doc in pending:
+                            await status_msg.edit(f"🔄 Found {len(pending)} pending requests in DB\n⚡ Processing in batches of {BATCH_SIZE}...")
+                            
+                            async def approve_user_db(doc):
                                 uid = doc.get("user_id")
                                 if not uid:
-                                    continue
+                                    return ("skip", None)
                                 try:
                                     await client.approve_chat_join_request(chat_id, uid)
-                                    approved += 1
-                                    auto_approve_stats["approved"] += 1
                                     pending_join_requests_col.update_one(
                                         {"chat_id": str(chat_id), "user_id": uid},
                                         {"$set": {"approved": True, "approved_at": datetime.utcnow()}}
                                     )
+                                    return ("success", uid)
                                 except Exception as e:
-                                    failed += 1
-                                    auto_approve_stats["failed"] += 1
-                                    # Mark as processed even if failed (user may have cancelled)
                                     pending_join_requests_col.update_one(
                                         {"chat_id": str(chat_id), "user_id": uid},
                                         {"$set": {"approved": True, "error": str(e)}}
                                     )
-                                if approved % 20 == 0:
-                                    try:
-                                        await status_msg.edit(f"🔄 Approving (DB)...\n✅ {approved} | ❌ {failed}")
-                                    except:
-                                        pass
-                                await asyncio.sleep(0.2)
+                                    return ("failed", uid)
+                            
+                            for i in range(0, len(pending), BATCH_SIZE):
+                                batch = pending[i:i + BATCH_SIZE]
+                                results = await asyncio.gather(*[approve_user_db(doc) for doc in batch], return_exceptions=True)
+                                
+                                for r in results:
+                                    if isinstance(r, tuple):
+                                        if r[0] == "success":
+                                            approved += 1
+                                            auto_approve_stats["approved"] += 1
+                                        elif r[0] == "failed":
+                                            failed += 1
+                                            auto_approve_stats["failed"] += 1
+                                
+                                try:
+                                    await status_msg.edit(f"🔄 Approving (DB)...\n✅ {approved} | ❌ {failed}\n📊 {approved + failed}/{len(pending)}")
+                                except:
+                                    pass
+                                await asyncio.sleep(0.5)
                     except Exception as e:
                         print(f"DB fallback failed: {e}")
 
