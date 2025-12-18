@@ -3714,7 +3714,11 @@ def register_bot_handlers():
             
             approved = 0
             failed = 0
-            
+
+            # Diagnostics: how many pending requests each method could SEE
+            found_userbot = None  # type: ignore
+            found_api = None      # type: ignore
+            found_db = None       # type: ignore
             try:
                 # Resolve chat_id
                 chat_id = None
@@ -3766,8 +3770,8 @@ def register_bot_handlers():
                         pending_users = []
                         async for join_request in userbot.get_chat_join_requests(chat_id):
                             pending_users.append(join_request.user.id)
-                        
-                        if pending_users:
+
+                        found_userbot = len(pending_users)
                             await status_msg.edit(f"🔄 Found {len(pending_users)} pending requests\n⚡ Processing in batches of {BATCH_SIZE}...")
                             
                             # Process in batches
@@ -3845,6 +3849,8 @@ def register_bot_handlers():
                                         offset_date = last_req.get("date")
                                         offset_user_id = (last_req.get("user") or {}).get("id")
 
+                                found_api = len(all_pending_users) if api_worked else None
+
                                 if api_worked and all_pending_users:
                                     await status_msg.edit(f"🔄 Found {len(all_pending_users)} pending requests\n⚡ Processing in batches of {BATCH_SIZE}...")
                                     
@@ -3886,6 +3892,7 @@ def register_bot_handlers():
                     try:
                         await status_msg.edit(f"🔄 Method 3: DB fallback...\n{channel}\n⚡ Batch mode: {BATCH_SIZE} at once")
                         pending = list(pending_join_requests_col.find({"chat_id": str(chat_id), "approved": False}).limit(500))
+                        found_db = len(pending)
                         if pending:
                             await status_msg.edit(f"🔄 Found {len(pending)} pending requests in DB\n⚡ Processing in batches of {BATCH_SIZE}...")
                             
@@ -3933,10 +3940,15 @@ def register_bot_handlers():
                     await status_msg.edit(
                         f"ℹ️ **No pending requests found**\n\n"
                         f"Channel: {chat_title or channel}\n\n"
-                        "Possible reasons:\n"
-                        "• Koi pending join request nahi hai\n"
-                        "• Channel me 'Request to Join' link nahi hai\n"
-                        "• Bot ko join-request events nahi mil rahe"
+                        "Diagnostics (pending visible):\n"
+                        f"• Userbot: {found_userbot if found_userbot is not None else 'N/A'}\n"
+                        f"• Bot API: {found_api if found_api is not None else 'N/A'}\n"
+                        f"• DB: {found_db if found_db is not None else 'N/A'}\n\n"
+                        "Fix checklist:\n"
+                        "• Channel invite link must be **Request to Join** (approval required)\n"
+                        "• Abhi koi user ne request bheji ho (pending requests actually exist)\n"
+                        "• Userbot account (SESSION_STRING) should be **Admin** in the channel\n"
+                        "• Try: /debugjoin -100... (for permission check)"
                     )
                 else:
                     await status_msg.edit(
