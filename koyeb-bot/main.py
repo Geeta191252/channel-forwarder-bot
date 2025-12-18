@@ -3,6 +3,7 @@ import re
 import asyncio
 import time
 import io
+import signal
 from datetime import datetime
 from flask import Flask, request, jsonify
 from pyrogram import Client, filters, idle
@@ -1065,28 +1066,32 @@ async def wizard_forward_messages(user_id, source_channel, dest_channel, skip_nu
 async def init_clients():
     """Initialize Pyrogram clients - supports unlimited accounts!"""
     global user_clients, bot_client, auto_approve_channels
-    
+
+    def is_auth_key_duplicated(err: Exception) -> bool:
+        s = str(err)
+        return ("AUTH_KEY_DUPLICATED" in s) or ("406" in s and "DUPLIC" in s.upper())
+
     # Load auto-approve channels from database
     if autoapprove_col is not None:
         enabled_channels = autoapprove_col.find({"enabled": True})
         for doc in enabled_channels:
             auto_approve_channels.add(doc["channel"])
         print(f"📥 Loaded {len(auto_approve_channels)} auto-approve channels")
-    
+
     # Load logo config from database
     load_logo_config()
     if logo_config.get("enabled"):
         print(f"🖼️ Logo watermark enabled")
-    
+
     # Load public access setting from database
     load_public_access()
     print(f"🌐 Public access: {'✅ ENABLED' if public_access_enabled else '❌ DISABLED (Only admins)'}")
-    
+
     # Get all session strings from environment
     session_strings = get_all_session_strings()
-    
+
     print(f"🔍 Found {len(session_strings)} session string(s)")
-    
+
     # Initialize user clients for fast forwarding (MTProto)
     if session_strings and API_ID and API_HASH:
         for idx, (name, session_string) in enumerate(session_strings):
@@ -1094,11 +1099,11 @@ async def init_clients():
                 f"user_session_{idx}",
                 api_id=int(API_ID),
                 api_hash=API_HASH,
-                session_string=session_string
+                session_string=session_string,
             )
 
-            # Start with FloodWait handling (avoids crash-loop on restarts)
-            for attempt in range(1, 4):
+            # Start with retry handling (AUTH_KEY_DUPLICATED can happen on redeploy when old instance hasn't disconnected yet)
+            for attempt in range(1, 7):
                 try:
                     await client.start()
                     user_clients.append((name, client))
@@ -1107,11 +1112,23 @@ async def init_clients():
                 except FloodWait as e:
                     wait_s = int(getattr(e, "value", 0) or 0)
                     wait_s = max(wait_s, 5)
-                    print(f"⏳ FloodWait while starting {name}: waiting {wait_s}s (attempt {attempt}/3)")
+                    print(f"⏳ FloodWait while starting {name}: waiting {wait_s}s (attempt {attempt}/6)")
                     await asyncio.sleep(wait_s)
                 except Exception as e:
+                    if is_auth_key_duplicated(e) and attempt < 6:
+                        # Give Telegram time to drop the old connection
+                        wait_s = min(20 * attempt, 120)
+                        print(
+                            f"♻️ {name} AUTH_KEY_DUPLICATED — waiting {wait_s}s then retry (attempt {attempt}/6). "
+                            "This usually means an old instance is still connected."
+                        )
+                        await asyncio.sleep(wait_s)
+                        continue
+
                     print(f"❌ Failed to start {name}: {e}")
                     break
+
+    print(f"🚀 Total active accounts: {len(user_clients)}")
     
     print(f"🚀 Total active accounts: {len(user_clients)}")
     
@@ -4175,18 +4192,43 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=port, debug=False)
 
 
+async def shutdown_clients():
+    """Gracefully stop all clients (prevents AUTH_KEY_DUPLICATED on quick redeploys)."""
+    global user_clients, bot_client
+
+    # Stop user clients
+    for name, c in list(user_clients):
+        try:
+            await c.stop()
+            print(f"🛑 Stopped {name}")
+        except Exception as e:
+            print(f"⚠️ Could not stop {name}: {e}")
+
+    user_clients = []
+
+    # Stop bot client
+    if bot_client is not None:
+        try:
+            await bot_client.stop()
+            print("🛑 Stopped bot client")
+        except Exception as e:
+            print(f"⚠️ Could not stop bot client: {e}")
+        finally:
+            bot_client = None
+
+
 async def main():
     """Main entry point"""
     print("=" * 50)
     print("🚀 Telegram Forwarder Bot (Multi-Account MTProto)")
     print("=" * 50)
-    
+
     # Load saved progress
     load_progress()
-    
+
     # Initialize clients
     await init_clients()
-    
+
     # Delete any webhook so bot uses polling mode
     if BOT_TOKEN:
         try:
@@ -4201,18 +4243,33 @@ async def main():
                         print(f"⚠️ Webhook delete: {result}")
         except Exception as e:
             print(f"⚠️ Could not delete webhook: {e}")
-    
+
     # Start Flask in background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    
+
     print("\n✅ Bot is running!")
     print(f"👥 Total accounts: {len(user_clients)}")
     print(f"⚡ Expected speed: ~{len(user_clients) * 30}/min")
     print("=" * 50)
-    
-    # Use Pyrogram's idle to keep bot running and processing updates
-    await idle()
+
+    # Ensure graceful disconnect on redeploy/termination
+    loop = asyncio.get_running_loop()
+
+    def _on_term(_sig, _frame):
+        loop.create_task(shutdown_clients())
+
+    try:
+        signal.signal(signal.SIGTERM, _on_term)
+        signal.signal(signal.SIGINT, _on_term)
+    except Exception:
+        pass
+
+    try:
+        # Use Pyrogram's idle to keep bot running and processing updates
+        await idle()
+    finally:
+        await shutdown_clients()
 
 
 if __name__ == "__main__":
