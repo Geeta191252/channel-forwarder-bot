@@ -3789,6 +3789,7 @@ def register_bot_handlers():
                             pending_users.append(join_request.user.id)
 
                         found_userbot = len(pending_users)
+                        if pending_users:
                             await status_msg.edit(f"🔄 Found {len(pending_users)} pending requests\n⚡ Processing in batches of {BATCH_SIZE}...")
                             
                             # Process in batches
