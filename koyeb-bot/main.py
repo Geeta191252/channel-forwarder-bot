@@ -3620,6 +3620,24 @@ def register_bot_handlers():
         except Exception as e:
             await message.reply(f"❌ debug error: {e}")
 
+    @bot_client.on_message(filters.regex(r"^/chatid(?:@\w+)?(?:\s+|$)"))
+    async def chatid_handler(client, message):
+        """Reply with current chat id/title/type so admins can target /approveall correctly"""
+        try:
+            chat = message.chat
+            title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or "(no title)"
+            username = f"@{chat.username}" if getattr(chat, "username", None) else "(no username)"
+            await message.reply(
+                "🆔 **Chat Info**\n\n"
+                f"Title: {title}\n"
+                f"Type: {chat.type}\n"
+                f"ID: `{chat.id}`\n"
+                f"Username: {username}\n\n"
+                "Use: `/approveall` (same chat me) ya `/approveall -100...`"
+            )
+        except Exception as e:
+            await message.reply(f"❌ chatid error: {e}")
+
     @bot_client.on_message(filters.regex(r"^/approveall(?:@\w+)?(?:\s+|-|$)"))
     async def approveall_handler(client, message):
         """Approve all pending join requests for a channel/group using BOT"""
@@ -3661,16 +3679,66 @@ def register_bot_handlers():
             # /approveall -100...
             # /approveall-100...
             if not arg:
-                await message.reply(
-                    "Usage: /approveall <channel/group>\n\n"
-                    "Examples:\n"
-                    "• /approveall @mychannel\n"
-                    "• /approveall @mygroup\n"
-                    "• /approveall -1001234567890\n"
-                    "• /approveall-1001234567890\n\n"
-                    "⚠️ Bot must be admin with 'Add Members' permission!"
-                )
-                return
+                # If command is executed INSIDE a group/channel, default to current chat
+                if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+                    channel = str(message.chat.id)
+                else:
+                    await message.reply(
+                        "Usage: /approveall <channel/group>\n\n"
+                        "Examples:\n"
+                        "• /approveall @mychannel\n"
+                        "• /approveall @mygroup\n"
+                        "• /approveall -1001234567890\n"
+                        "• /approveall-1001234567890\n\n"
+                        "Tip: jis chat me join requests dikh rahe hain, waha /chatid run karke id lo.\n"
+                        "⚠️ Bot must be admin with 'Add Members' permission!"
+                    )
+                    return
+            else:
+                channel = arg
+
+            status_msg = await message.reply(f"🔄 Approving all pending requests for {channel}...\n⏳ Please wait...")
+            
+            approved = 0
+            failed = 0
+            
+            try:
+                # Resolve chat_id
+                chat_id = None
+                chat_title = None
+
+                # If user passed a numeric id (e.g. -100...), use it directly
+                if isinstance(channel, str) and channel.lstrip("-").isdigit():
+                    try:
+                        chat_id = int(channel)
+                    except Exception:
+                        chat_id = None
+
+                # Otherwise, try resolving via Pyrogram client
+                if chat_id is None:
+                    chat = await client.get_chat(channel)
+                    chat_id = chat.id
+                    chat_title = getattr(chat, "title", None)
+                else:
+                    try:
+                        chat = await client.get_chat(chat_id)
+                        chat_title = getattr(chat, "title", None)
+                    except Exception:
+                        pass
+
+                # Hard requirement for approving OLD requests: userbot session must be connected
+                if not user_clients:
+                    await status_msg.edit(
+                        "❌ **Userbot not connected**\n\n"
+                        "Old pending join requests approve karne ke liye user account (SESSION_STRING) zaroori hai.\n\n"
+                        "Fix (Koyeb env):\n"
+                        "• API_ID\n"
+                        "• API_HASH\n"
+                        "• SESSION_STRING (generate_session.py se)\n\n"
+                        "Phir redeploy karke /approveall dobara chalao."
+                    )
+                    return
+
 
             channel = arg
             
