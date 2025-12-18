@@ -3585,7 +3585,19 @@ def register_bot_handlers():
                         chat_id = -int(arg)
                     else:
                         chat_id = int(arg)
+
                     # getChat needs bot to already be in the chat
+                    _, chat = await _get("getChat", {"chat_id": chat_id})
+                    if not chat.get("ok"):
+                        await message.reply(
+                            "❌ getChat failed: "
+                            f"{chat.get('description')} (code: {chat.get('error_code')})\n\n"
+                            "Ye usually tab hota hai jab bot chat me add nahi hai / access nahi hai."
+                        )
+                        return
+                    chat_id = (chat.get("result") or {}).get("id")
+                else:
+                    # Resolve username / invite link style
                     _, chat = await _get("getChat", {"chat_id": arg})
                     if not chat.get("ok"):
                         await message.reply(
@@ -3595,6 +3607,7 @@ def register_bot_handlers():
                         )
                         return
                     chat_id = (chat.get("result") or {}).get("id")
+
 
                 # Check bot membership/rights in that chat
                 _, member = await _get("getChatMember", {"chat_id": chat_id, "user_id": bot_id})
@@ -3738,52 +3751,6 @@ def register_bot_handlers():
                         "Phir redeploy karke /approveall dobara chalao."
                     )
                     return
-
-
-            channel = arg
-            
-            status_msg = await message.reply(f"🔄 Approving all pending requests for {channel}...\n⏳ Please wait...")
-            
-            approved = 0
-            failed = 0
-            
-            try:
-                # Resolve chat_id
-                chat_id = None
-                chat_title = None
-
-                # If user passed a numeric id (e.g. -100...), use it directly
-                if isinstance(channel, str) and channel.lstrip("-").isdigit():
-                    try:
-                        chat_id = int(channel)
-                    except Exception:
-                        chat_id = None
-
-                # Otherwise, try resolving via Pyrogram client
-                if chat_id is None:
-                    chat = await client.get_chat(channel)
-                    chat_id = chat.id
-                    chat_title = getattr(chat, "title", None)
-                else:
-                    try:
-                        chat = await client.get_chat(chat_id)
-                        chat_title = getattr(chat, "title", None)
-                    except Exception:
-                        pass
-
-                # Hard requirement for approving OLD requests: userbot session must be connected
-                if not user_clients:
-                    await status_msg.edit(
-                        "❌ **Userbot not connected**\n\n"
-                        "Old pending join requests approve karne ke liye user account (SESSION_STRING) zaroori hai.\n\n"
-                        "Fix (Koyeb env):\n"
-                        "• API_ID\n"
-                        "• API_HASH\n"
-                        "• SESSION_STRING (generate_session.py se)\n\n"
-                        "Phir redeploy karke /approveall dobara chalao."
-                    )
-                    return
-
                 # METHOD 1: Try USERBOT client (SESSION_STRING) - only user accounts can list join requests
                 userbot_worked = False
                 if user_clients:
