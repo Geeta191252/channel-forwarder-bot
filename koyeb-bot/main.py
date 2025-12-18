@@ -4071,6 +4071,14 @@ def home():
     })
 
 
+@flask_app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    """Handle Telegram webhook requests (we use polling, so just acknowledge)"""
+    # We use Pyrogram polling, not webhook mode
+    # This route exists to prevent 404 errors if webhook is accidentally set
+    return jsonify({"ok": True, "message": "Bot uses polling mode, not webhook"})
+
+
 @flask_app.route("/health")
 def health():
     return jsonify({
@@ -4113,6 +4121,21 @@ async def main():
     
     # Initialize clients
     await init_clients()
+    
+    # Delete any webhook so bot uses polling mode
+    if BOT_TOKEN:
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+                async with session.post(url) as resp:
+                    result = await resp.json()
+                    if result.get("ok"):
+                        print("🔄 Webhook deleted, using polling mode")
+                    else:
+                        print(f"⚠️ Webhook delete: {result}")
+        except Exception as e:
+            print(f"⚠️ Could not delete webhook: {e}")
     
     # Start Flask in background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
