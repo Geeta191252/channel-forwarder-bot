@@ -10,6 +10,9 @@ from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatType, ChatMemberStatus
 from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate, MessageNotModified
+
+# Chat type helpers (Pyrogram's filters.group may not match supergroups)
+GROUP_CHAT = filters.group | filters.supergroup
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
@@ -1212,21 +1215,29 @@ def register_bot_handlers():
             pass
         # Don't reply here - let command handlers do their job
 
-    @bot_client.on_message(filters.command(["ping"]))
-    async def ping_handler(client, message):
-        """Quick health check command."""
-        await message.reply("✅ Pong")
+    def _is_cmd(text: str, cmd: str) -> bool:
+        """Match /cmd or /cmd@BotUsername in any chat."""
+        if not text:
+            return False
+        return re.match(rf"^/{cmd}(?:@[A-Za-z0-9_]+)?(?:\s|$)", text.strip(), re.IGNORECASE) is not None
 
-    @bot_client.on_message(filters.command(["whoami"]))
-    async def whoami_handler(client, message):
-        """Show which bot account is running (helps confirm BOT_TOKEN matches)."""
-        try:
-            me = await client.get_me()
-            uname = getattr(me, "username", "") or ""
-            uid = getattr(me, "id", "")
-            await message.reply(f"🤖 Running as: @{uname}\n🆔 Bot ID: `{uid}`")
-        except Exception as e:
-            await message.reply(f"❌ whoami failed: {e}")
+    @bot_client.on_message(filters.text)
+    async def ping_whoami_text_router(client, message):
+        """Reliable group/private command handling even when Telegram appends @BotUsername."""
+        text = getattr(message, "text", "") or ""
+
+        if _is_cmd(text, "ping"):
+            return await message.reply("✅ Pong")
+
+        if _is_cmd(text, "whoami"):
+            try:
+                me = await client.get_me()
+                uname = getattr(me, "username", "") or ""
+                uid = getattr(me, "id", "")
+                return await message.reply(f"🤖 Running as: @{uname}\n🆔 Bot ID: `{uid}`")
+            except Exception as e:
+                return await message.reply(f"❌ whoami failed: {e}")
+
 
     @bot_client.on_message(filters.command(["myid", "checkadmin"]))
     async def myid_handler(client, message):
@@ -2858,7 +2869,7 @@ def register_bot_handlers():
     
     # ============ CONTENT MODERATION HANDLERS ============
     
-    @bot_client.on_message(filters.command("enablemod") & filters.group)
+    @bot_client.on_message(filters.command("enablemod") & GROUP_CHAT)
     async def enablemod_handler(client, message):
         """Enable content moderation in this group"""
         global moderation_config
@@ -2907,7 +2918,7 @@ def register_bot_handlers():
             "• /disablemod - Disable moderation"
         )
     
-    @bot_client.on_message(filters.command("disablemod") & filters.group)
+    @bot_client.on_message(filters.command("disablemod") & GROUP_CHAT)
     async def disablemod_handler(client, message):
         """Disable content moderation"""
         global moderation_config
@@ -2940,7 +2951,7 @@ def register_bot_handlers():
         
         await message.reply("🔴 **Content Moderation Disabled!**")
     
-    @bot_client.on_message(filters.command("blockforward") & filters.group)
+    @bot_client.on_message(filters.command("blockforward") & GROUP_CHAT)
     async def blockforward_handler(client, message):
         """Toggle blocking forwarded messages"""
         global moderation_config
@@ -2976,7 +2987,7 @@ def register_bot_handlers():
         status = "🟢 ON" if not current else "🔴 OFF"
         await message.reply(f"📨 **Block Forwarded Messages:** {status}")
     
-    @bot_client.on_message(filters.command("blocklinks") & filters.group)
+    @bot_client.on_message(filters.command("blocklinks") & GROUP_CHAT)
     async def blocklinks_handler(client, message):
         """Toggle blocking messages with links"""
         global moderation_config
@@ -3012,7 +3023,7 @@ def register_bot_handlers():
         status = "🟢 ON" if not current else "🔴 OFF"
         await message.reply(f"🔗 **Block Links/URLs:** {status}")
     
-    @bot_client.on_message(filters.command("blockbadwords") & filters.group)
+    @bot_client.on_message(filters.command("blockbadwords") & GROUP_CHAT)
     async def blockbadwords_handler(client, message):
         """Toggle blocking inappropriate content"""
         global moderation_config
@@ -3048,7 +3059,7 @@ def register_bot_handlers():
         status = "🟢 ON" if not current else "🔴 OFF"
         await message.reply(f"🚫 **Block Inappropriate Content:** {status}")
     
-    @bot_client.on_message(filters.command("blockmention") & filters.group)
+    @bot_client.on_message(filters.command("blockmention") & GROUP_CHAT)
     async def blockmention_handler(client, message):
         """Toggle blocking @mentions"""
         global moderation_config
@@ -3084,7 +3095,7 @@ def register_bot_handlers():
         status = "🟢 ON" if not current else "🔴 OFF"
         await message.reply(f"📛 **Block @Mentions:** {status}\n\nAll @username, @bot, @channel mentions will be deleted!")
     
-    @bot_client.on_message(filters.command("autodelete2min") & filters.group)
+    @bot_client.on_message(filters.command("autodelete2min") & GROUP_CHAT)
     async def autodelete2min_handler(client, message):
         """Toggle auto-delete messages after 2 minutes"""
         global moderation_config, auto_delete_queue
@@ -3126,7 +3137,7 @@ def register_bot_handlers():
     
     # ============ AUTO-DELETE 2MIN MESSAGE HANDLER ============
     
-    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=99)
+    @bot_client.on_message(GROUP_CHAT & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=99)
     async def auto_delete_message_handler(client, message):
         """Queue messages for auto-deletion after 2 minutes"""
         global auto_delete_queue
@@ -3155,7 +3166,7 @@ def register_bot_handlers():
         
         asyncio.create_task(delete_after_2min())
     
-    @bot_client.on_message(filters.command("modstatus") & filters.group)
+    @bot_client.on_message(filters.command("modstatus") & GROUP_CHAT)
     async def modstatus_handler(client, message):
         """Show moderation status"""
         chat_id = message.chat.id
@@ -3373,7 +3384,7 @@ def register_bot_handlers():
     
     # ============ CONTENT MODERATION MESSAGE FILTER ============
     
-    @bot_client.on_message(filters.group & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "modstatus", "warnings", "resetwarnings"]))
+    @bot_client.on_message(GROUP_CHAT & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "modstatus", "warnings", "resetwarnings"]))
     async def moderation_filter_handler(client, message):
         """Filter and delete inappropriate messages with warning system"""
         global moderation_stats, user_warnings
@@ -3495,7 +3506,7 @@ def register_bot_handlers():
         except Exception as e:
             print(f"Moderation error: {e}")
     
-    @bot_client.on_message(filters.command("warnings") & filters.group)
+    @bot_client.on_message(filters.command("warnings") & GROUP_CHAT)
     async def check_warnings_handler(client, message):
         """Check warnings for a user"""
         chat_id = message.chat.id
@@ -3519,7 +3530,7 @@ def register_bot_handlers():
             f"{'🔴 Next violation = BAN!' if count == MAX_WARNINGS - 1 else ''}"
         )
     
-    @bot_client.on_message(filters.command("resetwarnings") & filters.group)
+    @bot_client.on_message(filters.command("resetwarnings") & GROUP_CHAT)
     async def reset_warnings_handler(client, message):
         """Reset warnings for a user (admin only)"""
         chat_id = message.chat.id
