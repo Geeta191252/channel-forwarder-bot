@@ -1156,7 +1156,23 @@ async def init_clients():
         for attempt in range(1, 6):
             try:
                 await bot_client.start()
-                print("🤖 Bot client started - now listening for messages!")
+                try:
+                    me = await bot_client.get_me()
+                    uname = getattr(me, "username", "") or ""
+                    uid = getattr(me, "id", "")
+                    print(f"🤖 Bot client started as @{uname} (id={uid}) - now listening for messages!")
+
+                    # Optional startup self-test message
+                    admin_chat_id = (os.getenv("ADMIN_CHAT_ID") or "").strip()
+                    if admin_chat_id:
+                        try:
+                            await bot_client.send_message(int(admin_chat_id), f"✅ Bot started: @{uname} (id={uid})")
+                            print(f"📨 Startup self-test sent to ADMIN_CHAT_ID={admin_chat_id}")
+                        except Exception as send_err:
+                            print(f"⚠️ Startup self-test failed: {send_err}")
+                except Exception as info_err:
+                    print(f"⚠️ Bot started but get_me/self-test failed: {info_err}")
+
                 break
             except FloodWait as e:
                 wait_s = int(getattr(e, "value", 0) or 0)
@@ -1186,6 +1202,22 @@ def register_bot_handlers():
         except Exception:
             pass
         # Don't reply here - let command handlers do their job
+
+    @bot_client.on_message(filters.command(["ping"]))
+    async def ping_handler(client, message):
+        """Quick health check command."""
+        await message.reply("✅ Pong")
+
+    @bot_client.on_message(filters.command(["whoami"]))
+    async def whoami_handler(client, message):
+        """Show which bot account is running (helps confirm BOT_TOKEN matches)."""
+        try:
+            me = await client.get_me()
+            uname = getattr(me, "username", "") or ""
+            uid = getattr(me, "id", "")
+            await message.reply(f"🤖 Running as: @{uname}\n🆔 Bot ID: `{uid}`")
+        except Exception as e:
+            await message.reply(f"❌ whoami failed: {e}")
 
     @bot_client.on_message(filters.command(["myid", "checkadmin"]))
     async def myid_handler(client, message):
