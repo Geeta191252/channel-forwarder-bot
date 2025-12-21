@@ -159,6 +159,7 @@ BAD_WORDS = [
 # Pyrogram clients - Multiple user accounts for speed
 user_clients = []  # List of (name, client) tuples
 bot_client = None   # Bot for commands/UI
+bot_watchdog_task = None  # Background task to auto-recover bot polling
 current_client_index = 0  # For round-robin rotation
 
 
@@ -4273,9 +4274,66 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=port, debug=False)
 
 
+async def bot_watchdog():
+    """Keep the bot reliably receiving updates.
+
+    On some hosts, multiple instances or brief network drops can cause polling to stop.
+    This task periodically checks connection state and tries to self-recover.
+    """
+    global bot_client
+
+    while True:
+        await asyncio.sleep(25)
+
+        if bot_client is None:
+            continue
+
+        try:
+            # If disconnected, try a clean restart
+            if not getattr(bot_client, "is_connected", False):
+                print("⚠️ bot_client disconnected — restarting...")
+                try:
+                    await bot_client.stop()
+                except Exception:
+                    pass
+                await bot_client.start()
+                try:
+                    await bot_client.delete_webhook(drop_pending_updates=False)
+                except Exception:
+                    pass
+                print("✅ bot_client restarted")
+            else:
+                # Light touch keepalive
+                await bot_client.get_me()
+        except Exception as e:
+            print(f"⚠️ bot_watchdog error: {e} — attempting recovery")
+            try:
+                await bot_client.stop()
+            except Exception:
+                pass
+            try:
+                await asyncio.sleep(3)
+                await bot_client.start()
+                try:
+                    await bot_client.delete_webhook(drop_pending_updates=False)
+                except Exception:
+                    pass
+                print("✅ bot_client recovered")
+            except Exception as e2:
+                print(f"❌ bot_client recovery failed: {e2}")
+
+
 async def shutdown_clients():
     """Gracefully stop all clients (prevents AUTH_KEY_DUPLICATED on quick redeploys)."""
-    global user_clients, bot_client
+    global user_clients, bot_client, bot_watchdog_task
+
+    # Stop watchdog first
+    if bot_watchdog_task is not None:
+        try:
+            bot_watchdog_task.cancel()
+        except Exception:
+            pass
+        bot_watchdog_task = None
 
     # Stop user clients
     for name, c in list(user_clients):
@@ -4318,6 +4376,12 @@ async def main():
 
     # Initialize clients (this can take time, but Flask is already up)
     await init_clients()
+
+    # Start bot watchdog (auto-recovers if polling stops)
+    global bot_watchdog_task
+    if bot_client is not None and bot_watchdog_task is None:
+        bot_watchdog_task = asyncio.create_task(bot_watchdog())
+        print("🛡️ Bot watchdog enabled")
 
     # Webhook clearing is handled via bot_client.delete_webhook() during init_clients()
     # (keeps dependencies minimal and avoids silent failures)
