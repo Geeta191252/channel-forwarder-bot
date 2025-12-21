@@ -1156,6 +1156,14 @@ async def init_clients():
         for attempt in range(1, 6):
             try:
                 await bot_client.start()
+
+                # Ensure Bot API webhook is disabled so polling works (common reason for "bot not responding")
+                try:
+                    await bot_client.delete_webhook(drop_pending_updates=True)
+                    print("🔄 Bot webhook cleared (polling mode active)")
+                except Exception as wh_err:
+                    print(f"⚠️ Could not clear webhook via bot client: {wh_err}")
+
                 try:
                     me = await bot_client.get_me()
                     uname = getattr(me, "username", "") or ""
@@ -4311,20 +4319,8 @@ async def main():
     # Initialize clients (this can take time, but Flask is already up)
     await init_clients()
 
-    # Delete any webhook so bot uses polling mode
-    if BOT_TOKEN:
-        try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
-                async with session.post(url) as resp:
-                    result = await resp.json()
-                    if result.get("ok"):
-                        print("🔄 Webhook deleted, using polling mode")
-                    else:
-                        print(f"⚠️ Webhook delete: {result}")
-        except Exception as e:
-            print(f"⚠️ Could not delete webhook: {e}")
+    # Webhook clearing is handled via bot_client.delete_webhook() during init_clients()
+    # (keeps dependencies minimal and avoids silent failures)
 
     print("\n✅ Bot is running!")
     print(f"👥 Total accounts: {len(user_clients)}")
