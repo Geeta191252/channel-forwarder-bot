@@ -1175,7 +1175,8 @@ def register_bot_handlers():
     load_force_subscribe()
 
     # Debug: log every private message (helps confirm polling is working)
-    @bot_client.on_message(filters.private)
+    # Use group=-1 so this runs AFTER command handlers (group=0) and doesn't block them
+    @bot_client.on_message(filters.private, group=-1)
     async def _debug_private_message(client, message):
         try:
             chat_id = getattr(message.chat, "id", None)
@@ -1184,10 +1185,7 @@ def register_bot_handlers():
             print(f"🛰️ private msg | chat_id={chat_id} from_id={from_id} text={text!r}")
         except Exception:
             pass
-
-        # Lightweight health reply (so user sees something even if commands fail)
-        if (message.text or "").strip().lower() in {"/ping", "ping"}:
-            return await message.reply("✅ Bot is online.")
+        # Don't reply here - let command handlers do their job
 
     @bot_client.on_message(filters.command(["myid", "checkadmin"]))
     async def myid_handler(client, message):
