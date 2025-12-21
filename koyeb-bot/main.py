@@ -1148,11 +1148,15 @@ async def init_clients():
             bot_token=BOT_TOKEN
         )
 
+        # Register handlers BEFORE starting (required for Pyrogram polling)
+        register_bot_handlers()
+        print("📝 Bot handlers registered")
+
         # Start with FloodWait handling (Telegram can rate-limit frequent restarts)
         for attempt in range(1, 6):
             try:
                 await bot_client.start()
-                print("🤖 Bot client started")
+                print("🤖 Bot client started - now listening for messages!")
                 break
             except FloodWait as e:
                 wait_s = int(getattr(e, "value", 0) or 0)
@@ -1162,9 +1166,6 @@ async def init_clients():
             except Exception as e:
                 print(f"❌ Failed to start bot client: {e}")
                 raise
-
-        # Register handlers
-        register_bot_handlers()
 
 
 def register_bot_handlers():
