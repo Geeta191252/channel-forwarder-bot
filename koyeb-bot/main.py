@@ -1174,6 +1174,21 @@ def register_bot_handlers():
     # Load force subscribe channels on startup
     load_force_subscribe()
 
+    # Debug: log every private message (helps confirm polling is working)
+    @bot_client.on_message(filters.private)
+    async def _debug_private_message(client, message):
+        try:
+            chat_id = getattr(message.chat, "id", None)
+            from_id = getattr(getattr(message, "from_user", None), "id", None)
+            text = getattr(message, "text", "")
+            print(f"🛰️ private msg | chat_id={chat_id} from_id={from_id} text={text!r}")
+        except Exception:
+            pass
+
+        # Lightweight health reply (so user sees something even if commands fail)
+        if (message.text or "").strip().lower() in {"/ping", "ping"}:
+            return await message.reply("✅ Bot is online.")
+
     @bot_client.on_message(filters.command(["myid", "checkadmin"]))
     async def myid_handler(client, message):
         """Show your Telegram ID and whether the bot sees you as an admin"""
