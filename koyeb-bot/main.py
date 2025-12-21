@@ -4233,10 +4233,19 @@ async def main():
     print("🚀 Telegram Forwarder Bot (Multi-Account MTProto)")
     print("=" * 50)
 
+    # Start Flask FIRST so health check passes immediately
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print(f"🌐 Flask server started on port {os.getenv('PORT', 8000)}")
+
+    # Small delay to ensure Flask is listening before Koyeb health check
+    import time
+    time.sleep(2)
+
     # Load saved progress
     load_progress()
 
-    # Initialize clients
+    # Initialize clients (this can take time, but Flask is already up)
     await init_clients()
 
     # Delete any webhook so bot uses polling mode
@@ -4253,10 +4262,6 @@ async def main():
                         print(f"⚠️ Webhook delete: {result}")
         except Exception as e:
             print(f"⚠️ Could not delete webhook: {e}")
-
-    # Start Flask in background thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
 
     print("\n✅ Bot is running!")
     print(f"👥 Total accounts: {len(user_clients)}")
