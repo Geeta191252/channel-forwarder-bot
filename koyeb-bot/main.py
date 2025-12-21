@@ -1217,10 +1217,27 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.command("start"))
     async def start_handler(client, message):
-        user_id = message.from_user.id
-        bot_info = await client.get_me()
-        bot_username = bot_info.username
-        
+        # Debug: confirm bot is receiving updates
+        try:
+            chat_id = getattr(message.chat, "id", None)
+            from_id = getattr(getattr(message, "from_user", None), "id", None)
+            text = getattr(message, "text", "")
+            print(f"📩 /start received | chat_id={chat_id} from_id={from_id} text={text!r}")
+        except Exception:
+            pass
+
+        user_id = message.from_user.id if message.from_user else None
+        if not user_id:
+            return await message.reply("❌ Couldn't read your user id. Please try again.")
+
+        # Bot username (used for referral links) — keep it resilient
+        bot_username = ""
+        try:
+            bot_info = await client.get_me()
+            bot_username = bot_info.username or ""
+        except Exception as e:
+            print(f"⚠️ get_me() failed in /start: {e}")
+
         # Parse referral code from /start ref_USERID
         referrer_id = None
         if len(message.command) > 1:
@@ -1231,7 +1248,7 @@ def register_bot_handlers():
                     # Add referral if valid
                     if referrer_id != user_id:
                         add_referral(user_id, referrer_id)
-                except:
+                except Exception:
                     pass
         
         # Check if user is admin (skip all requirements)
