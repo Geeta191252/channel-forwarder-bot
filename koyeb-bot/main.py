@@ -19,6 +19,8 @@ load_dotenv()
 
 # Flask app for health checks
 flask_app = Flask(__name__)
+# Alias for WSGI servers like gunicorn (some platforms expect `app`)
+app = flask_app
 
 # MongoDB setup
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or ""
@@ -4147,7 +4149,7 @@ def register_bot_handlers():
 def home():
     num_accounts = len(user_clients)
     return jsonify({
-        "status": "ok", 
+        "status": "ok",
         "message": "Telegram Forwarder Bot (Multi-Account MTProto)",
         "accounts": num_accounts,
         "expected_speed": f"{num_accounts * 30}/min"
@@ -4155,10 +4157,17 @@ def home():
 
 
 @flask_app.route("/webhook", methods=["GET", "POST"])
+@flask_app.route("/webhook/", methods=["GET", "POST"])
 def webhook():
-    """Handle Telegram webhook requests (we use polling, so just acknowledge)"""
-    # We use Pyrogram polling, not webhook mode
-    # This route exists to prevent 404 errors if webhook is accidentally set
+    """Handle Telegram webhook requests (we use polling, so just acknowledge)."""
+    try:
+        # Helpful for Koyeb logs: shows if Telegram (or anything) is still hitting webhook
+        print(f"🌐 /webhook hit: method={request.method} content_type={request.content_type}")
+    except Exception:
+        pass
+
+    # We use Pyrogram polling, not webhook mode.
+    # This route exists to prevent 404 errors if webhook is accidentally set.
     return jsonify({"ok": True, "message": "Bot uses polling mode, not webhook"})
 
 
