@@ -18,9 +18,11 @@ from dotenv import load_dotenv
 import threading
 from PIL import Image, ImageDraw, ImageFont
 
-load_dotenv()
+# Build marker (changes on each code update) to verify Koyeb is running the latest image
+BUILD_MARKER = "2025-12-24T22:07:00Z"
+print(f"✅ BOT BUILD_MARKER: {BUILD_MARKER}")
 
-# Flask app for health checks
+load_dotenv()
 flask_app = Flask(__name__)
 # Alias for WSGI servers like gunicorn (some platforms expect `app`)
 app = flask_app
