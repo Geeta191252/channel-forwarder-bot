@@ -2070,14 +2070,18 @@ def register_bot_handlers():
             await safe_edit_message(
                 callback_query.message,
                 "🆘 **Admin Controls**\n\n"
+                "**🔒 Force Join (New!):**\n"
+                "`/setforcejoin @channel|Name|Link` - Enable\n"
+                "`/removeforcejoin` - Disable force join\n"
+                "`/forcejoininfo` - View status\n\n"
                 "**Block @Mentions:**\n"
-                "/blockmention - Toggle @mention blocking\n\n"
+                "`/blockmention` - Toggle @mention blocking\n\n"
                 "**Auto-Delete 2 min:**\n"
-                "/autodelete2min - Toggle auto-delete messages after 2 min\n\n"
+                "`/autodelete2min` - Toggle auto-delete\n\n"
                 "**Other Commands (in group):**\n"
-                "/enablemod - Enable moderation first\n"
-                "/modstatus - View all settings\n\n"
-                "⚡ Auto-delete will delete ALL messages in group after 2 minutes!\n"
+                "`/enablemod` - Enable moderation first\n"
+                "`/modstatus` - View all settings\n\n"
+                "⚡ Force Join: Non-members के messages delete होंगे!\n"
                 "👮 Admins are exempt from filters.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
