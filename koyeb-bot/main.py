@@ -11,8 +11,8 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatType, ChatMemberStatus
 from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate, MessageNotModified
 
-# Chat type helpers (Pyrogram's filters.group may not match supergroups)
-GROUP_CHAT = filters.group | filters.supergroup
+# Chat type helper - filters.group covers both groups and supergroups in Pyrogram 2.x
+GROUP_CHAT = filters.group
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
