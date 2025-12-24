@@ -44,6 +44,10 @@ user_channels_col = db["user_channels"] if db is not None else None
 force_sub_col = db["force_subscribe"] if db is not None else None
 referrals_col = db["referrals"] if db is not None else None
 bot_settings_col = db["bot_settings"] if db is not None else None
+group_forcejoin_col = db["group_forcejoin"] if db is not None else None  # Force join config per group
+
+# Force join config per group: {chat_id: {"channel_id": "", "channel_name": "", "invite_link": ""}}
+group_forcejoin_config = {}
 
 # Public access control
 public_access_enabled = False  # Default: only admins can use bot
@@ -3135,9 +3139,313 @@ def register_bot_handlers():
         status = "🟢 ON" if not current else "🔴 OFF"
         await message.reply(f"🗑️ **Auto-Delete 2min:** {status}\n\nAll messages in this group will be deleted after 2 minutes!")
     
+    # ============ FORCE JOIN HANDLERS ============
+    
+    def load_group_forcejoin(chat_id):
+        """Load force join config for a group from database"""
+        global group_forcejoin_config
+        if group_forcejoin_col is not None:
+            saved = group_forcejoin_col.find_one({"chat_id": chat_id})
+            if saved:
+                group_forcejoin_config[chat_id] = {
+                    "enabled": saved.get("enabled", False),
+                    "channel_id": saved.get("channel_id"),
+                    "channel_name": saved.get("channel_name", "Channel"),
+                    "invite_link": saved.get("invite_link", "")
+                }
+                return group_forcejoin_config[chat_id]
+        return {"enabled": False, "channel_id": None, "channel_name": "", "invite_link": ""}
+    
+    def save_group_forcejoin(chat_id):
+        """Save force join config for a group to database"""
+        if group_forcejoin_col is not None and chat_id in group_forcejoin_config:
+            group_forcejoin_col.update_one(
+                {"chat_id": chat_id},
+                {"$set": {
+                    **group_forcejoin_config[chat_id],
+                    "chat_id": chat_id,
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
+    
+    @bot_client.on_message(filters.command("setforcejoin") & GROUP_CHAT)
+    async def setforcejoin_handler(client, message):
+        """Set force join channel for this group"""
+        global group_forcejoin_config
+        
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+        
+        # Check if admin
+        is_bot_admin = bool(user_id and user_id in ADMIN_IDS)
+        is_group_admin = False
+        
+        if message.sender_chat and message.sender_chat.id == chat_id:
+            is_group_admin = True
+        elif user_id:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                if member.status in ["administrator", "creator"]:
+                    is_group_admin = True
+            except Exception:
+                pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can set force join!")
+            return
+        
+        # Parse command: /setforcejoin @channel|Channel Name|https://t.me/+invite
+        text = message.text or ""
+        parts = text.split(maxsplit=1)
+        
+        if len(parts) < 2:
+            await message.reply(
+                "❌ **Usage:**\n"
+                "`/setforcejoin @channel_username`\n"
+                "OR\n"
+                "`/setforcejoin @channel|Channel Name|https://t.me/+invite`\n\n"
+                "**Example:**\n"
+                "`/setforcejoin @MyChannel|My Channel|https://t.me/+abc123`"
+            )
+            return
+        
+        channel_data = parts[1].strip()
+        channel_parts = channel_data.split("|")
+        
+        channel_id = channel_parts[0].strip()
+        channel_name = channel_parts[1].strip() if len(channel_parts) > 1 else channel_id
+        invite_link = channel_parts[2].strip() if len(channel_parts) > 2 else ""
+        
+        # Validate channel format
+        if not channel_id.startswith("@") and not channel_id.startswith("-"):
+            channel_id = "@" + channel_id
+        
+        # If no invite link provided, try to create one
+        if not invite_link:
+            invite_link = f"https://t.me/{channel_id.replace('@', '')}"
+        
+        # Save config
+        group_forcejoin_config[chat_id] = {
+            "enabled": True,
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "invite_link": invite_link
+        }
+        save_group_forcejoin(chat_id)
+        
+        await message.reply(
+            f"✅ **Force Join Enabled!**\n\n"
+            f"📢 Channel: `{channel_id}`\n"
+            f"📛 Name: **{channel_name}**\n"
+            f"🔗 Link: {invite_link}\n\n"
+            f"⚠️ Users must join this channel to send messages.\n"
+            f"Messages from non-members will be deleted with a join button!"
+        )
+    
+    @bot_client.on_message(filters.command("removeforcejoin") & GROUP_CHAT)
+    async def removeforcejoin_handler(client, message):
+        """Remove force join for this group"""
+        global group_forcejoin_config
+        
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+        
+        # Check if admin
+        is_bot_admin = bool(user_id and user_id in ADMIN_IDS)
+        is_group_admin = False
+        
+        if message.sender_chat and message.sender_chat.id == chat_id:
+            is_group_admin = True
+        elif user_id:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                if member.status in ["administrator", "creator"]:
+                    is_group_admin = True
+            except Exception:
+                pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can remove force join!")
+            return
+        
+        # Disable force join
+        if chat_id in group_forcejoin_config:
+            group_forcejoin_config[chat_id]["enabled"] = False
+            save_group_forcejoin(chat_id)
+        
+        if group_forcejoin_col is not None:
+            group_forcejoin_col.delete_one({"chat_id": chat_id})
+        
+        await message.reply("🔴 **Force Join Disabled!**\n\nAll users can now send messages without joining any channel.")
+    
+    @bot_client.on_message(filters.command("forcejoininfo") & GROUP_CHAT)
+    async def forcejoininfo_handler(client, message):
+        """Show force join status"""
+        chat_id = message.chat.id
+        
+        if chat_id not in group_forcejoin_config:
+            group_forcejoin_config[chat_id] = load_group_forcejoin(chat_id)
+        
+        config = group_forcejoin_config.get(chat_id, {})
+        
+        if config.get("enabled") and config.get("channel_id"):
+            await message.reply(
+                f"🔐 **Force Join Status**\n\n"
+                f"**Status:** 🟢 Enabled\n"
+                f"📢 Channel: `{config.get('channel_id')}`\n"
+                f"📛 Name: **{config.get('channel_name', 'N/A')}**\n"
+                f"🔗 Link: {config.get('invite_link', 'N/A')}\n\n"
+                f"⚠️ Users must join to send messages!"
+            )
+        else:
+            await message.reply(
+                f"🔐 **Force Join Status**\n\n"
+                f"**Status:** 🔴 Disabled\n\n"
+                f"Use `/setforcejoin @channel` to enable."
+            )
+    
+    # ============ FORCE JOIN MESSAGE FILTER ============
+    
+    @bot_client.on_message(GROUP_CHAT & ~filters.command(["setforcejoin", "removeforcejoin", "forcejoininfo", "enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=1)
+    async def forcejoin_filter_handler(client, message):
+        """Delete messages from users who haven't joined the force join channel"""
+        global group_forcejoin_config
+        
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+        
+        if not user_id:
+            return
+        
+        # Load config if not in memory
+        if chat_id not in group_forcejoin_config:
+            group_forcejoin_config[chat_id] = load_group_forcejoin(chat_id)
+        
+        config = group_forcejoin_config.get(chat_id, {})
+        
+        # Skip if force join is disabled
+        if not config.get("enabled") or not config.get("channel_id"):
+            return
+        
+        # Skip if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                return
+        except:
+            pass
+        
+        # Check if user has joined the channel
+        channel_id = config.get("channel_id")
+        try:
+            if channel_id.startswith("-"):
+                check_chat_id = int(channel_id)
+            elif channel_id.startswith("@"):
+                check_chat_id = channel_id
+            else:
+                check_chat_id = "@" + channel_id
+            
+            channel_member = await client.get_chat_member(check_chat_id, user_id)
+            if channel_member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
+                # User has joined, allow message
+                return
+        except Exception as e:
+            # If we can't check (user not found in channel), assume not joined
+            pass
+        
+        # User hasn't joined - delete message and send join button
+        try:
+            await message.delete()
+        except:
+            pass
+        
+        # Send join button message
+        user_name = message.from_user.first_name if message.from_user else "User"
+        channel_name = config.get("channel_name", "Channel")
+        invite_link = config.get("invite_link", "")
+        
+        join_button = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"📢 Join {channel_name}", url=invite_link)],
+            [InlineKeyboardButton("✅ I've Joined", callback_data=f"check_forcejoin_{chat_id}_{user_id}")]
+        ])
+        
+        try:
+            warn_msg = await client.send_message(
+                chat_id,
+                f"👋 **{user_name}**, आप यहाँ message नहीं भेज सकते!\n\n"
+                f"📢 पहले **{channel_name}** join करो, फिर message करो!\n\n"
+                f"⬇️ नीचे button पर click करके join करो:",
+                reply_markup=join_button
+            )
+            # Auto-delete warning after 30 seconds
+            asyncio.create_task(auto_delete_message(warn_msg, 30))
+        except Exception as e:
+            print(f"Failed to send force join warning: {e}")
+    
+    # ============ FORCE JOIN CALLBACK HANDLER ============
+    
+    @bot_client.on_callback_query(filters.regex(r"^check_forcejoin_"))
+    async def check_forcejoin_callback(client, callback_query):
+        """Handle 'I've Joined' button click"""
+        data = callback_query.data
+        parts = data.split("_")
+        
+        if len(parts) < 4:
+            await callback_query.answer("❌ Invalid request!", show_alert=True)
+            return
+        
+        chat_id = int(parts[2])
+        target_user_id = int(parts[3])
+        clicker_user_id = callback_query.from_user.id
+        
+        # Only the mentioned user can click this button
+        if clicker_user_id != target_user_id:
+            await callback_query.answer("❌ यह button सिर्फ उस user के लिए है!", show_alert=True)
+            return
+        
+        # Get config
+        if chat_id not in group_forcejoin_config:
+            group_forcejoin_config[chat_id] = load_group_forcejoin(chat_id)
+        
+        config = group_forcejoin_config.get(chat_id, {})
+        channel_id = config.get("channel_id")
+        
+        if not channel_id:
+            await callback_query.answer("✅ Force join disabled!", show_alert=True)
+            try:
+                await callback_query.message.delete()
+            except:
+                pass
+            return
+        
+        # Check if user has joined now
+        try:
+            if channel_id.startswith("-"):
+                check_chat_id = int(channel_id)
+            elif channel_id.startswith("@"):
+                check_chat_id = channel_id
+            else:
+                check_chat_id = "@" + channel_id
+            
+            channel_member = await client.get_chat_member(check_chat_id, clicker_user_id)
+            if channel_member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
+                # User has joined!
+                await callback_query.answer("✅ धन्यवाद! अब आप message भेज सकते हैं!", show_alert=True)
+                try:
+                    await callback_query.message.delete()
+                except:
+                    pass
+                return
+        except Exception as e:
+            pass
+        
+        # Still not joined
+        await callback_query.answer("❌ आपने अभी तक channel join नहीं किया! पहले join करो!", show_alert=True)
+    
     # ============ AUTO-DELETE 2MIN MESSAGE HANDLER ============
     
-    @bot_client.on_message(GROUP_CHAT & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=99)
+    @bot_client.on_message(GROUP_CHAT & ~filters.command(["setforcejoin", "removeforcejoin", "forcejoininfo", "enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=99)
     async def auto_delete_message_handler(client, message):
         """Queue messages for auto-deletion after 2 minutes"""
         global auto_delete_queue
@@ -3384,7 +3692,7 @@ def register_bot_handlers():
     
     # ============ CONTENT MODERATION MESSAGE FILTER ============
     
-    @bot_client.on_message(GROUP_CHAT & ~filters.command(["enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "modstatus", "warnings", "resetwarnings"]))
+    @bot_client.on_message(GROUP_CHAT & ~filters.command(["setforcejoin", "removeforcejoin", "forcejoininfo", "enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "modstatus", "warnings", "resetwarnings"]))
     async def moderation_filter_handler(client, message):
         """Filter and delete inappropriate messages with warning system"""
         global moderation_stats, user_warnings
