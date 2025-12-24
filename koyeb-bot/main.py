@@ -1285,15 +1285,33 @@ def register_bot_handlers():
         
         return (is_bot_admin or is_group_admin, user_id)
 
-    @bot_client.on_message(filters.text, group=-10)
+    @bot_client.on_message(filters.all, group=-10)
     async def universal_command_router(client, message):
         """
         Universal command router that handles ALL commands reliably, even with @BotUsername suffix.
-        Uses group=-10 to run first. Handles group moderation commands directly here.
+        Uses group=-10 and filters.all to catch everything including commands.
         """
-        text = getattr(message, "text", "") or ""
+        text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+        if not text:
+            return  # No text/caption, let other handlers process
+        
         chat_id = message.chat.id
         is_group = message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]
+        
+        # Debug command - works everywhere
+        if _is_cmd(text, "debug"):
+            debug_info = (
+                f"🔍 **Debug Info**\n\n"
+                f"Chat ID: `{chat_id}`\n"
+                f"Chat Type: `{message.chat.type}`\n"
+                f"Is Group: `{is_group}`\n"
+                f"Text: `{text[:50]}...`\n"
+                f"From User: `{message.from_user.id if message.from_user else 'None'}`\n"
+                f"Message ID: `{message.id}`"
+            )
+            await message.reply(debug_info)
+            message.stop_propagation()
+            return
 
         # ===== PRIVATE + GROUP COMMANDS =====
         
