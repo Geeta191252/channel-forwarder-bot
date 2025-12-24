@@ -1261,17 +1261,42 @@ def register_bot_handlers():
             return False
         return re.match(rf"^/{cmd}(?:@[A-Za-z0-9_]+)?(?:\s|$)", text.strip(), re.IGNORECASE) is not None
 
-    @bot_client.on_message(filters.text, group=-10)
-    async def ping_whoami_text_router(client, message):
-        """
-        Reliable group/private command handling for /start, /ping, /whoami even when
-        Telegram appends @BotUsername.
+    # ============ GROUP COMMAND HELPER FUNCTIONS ============
+    
+    async def check_group_admin(client, message):
+        """Check if user is bot admin or group admin. Returns (is_admin, user_id)"""
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
         
-        IMPORTANT: Uses group=-10 (runs early) and does NOT call message.stop_propagation()
-        for unhandled commands, so other handlers (like /enablemod) can still process them.
+        is_bot_admin = bool(user_id and user_id in ADMIN_IDS)
+        is_group_admin = False
+        
+        if message.sender_chat and message.sender_chat.id == chat_id:
+            is_group_admin = True
+        elif user_id:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                # Handle both string and enum status
+                status_str = str(member.status).lower()
+                if "admin" in status_str or "creator" in status_str or "owner" in status_str:
+                    is_group_admin = True
+            except Exception as e:
+                print(f"⚠️ get_chat_member failed: {e}")
+        
+        return (is_bot_admin or is_group_admin, user_id)
+
+    @bot_client.on_message(filters.text, group=-10)
+    async def universal_command_router(client, message):
+        """
+        Universal command router that handles ALL commands reliably, even with @BotUsername suffix.
+        Uses group=-10 to run first. Handles group moderation commands directly here.
         """
         text = getattr(message, "text", "") or ""
+        chat_id = message.chat.id
+        is_group = message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]
 
+        # ===== PRIVATE + GROUP COMMANDS =====
+        
         if _is_cmd(text, "start"):
             await handle_start(client, message)
             message.stop_propagation()
@@ -1290,6 +1315,258 @@ def register_bot_handlers():
                 await message.reply(f"🤖 Running as: @{uname}\n🆔 Bot ID: `{uid}`")
             except Exception as e:
                 await message.reply(f"❌ whoami failed: {e}")
+            message.stop_propagation()
+            return
+
+        # ===== GROUP-ONLY MODERATION COMMANDS =====
+        
+        if not is_group:
+            # Let other handlers process private chat messages
+            return
+        
+        # /enablemod
+        if _is_cmd(text, "enablemod"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply(f"❌ Only admins can enable moderation!\nDebug: user_id={user_id}")
+                message.stop_propagation()
+                return
+            
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            moderation_config[chat_id]["enabled"] = True
+            save_moderation_config(chat_id)
+            
+            await message.reply(
+                "✅ **Content Moderation Enabled!**\n\n"
+                "Commands:\n"
+                "• /blockforward - Block forwarded messages\n"
+                "• /blocklinks - Block links/URLs\n"
+                "• /blockbadwords - Block inappropriate content\n"
+                "• /modstatus - View moderation settings\n"
+                "• /disablemod - Disable moderation"
+            )
+            message.stop_propagation()
+            return
+        
+        # /disablemod
+        if _is_cmd(text, "disablemod"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only admins can disable moderation!")
+                message.stop_propagation()
+                return
+            
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            moderation_config[chat_id]["enabled"] = False
+            save_moderation_config(chat_id)
+            
+            await message.reply("🔴 **Content Moderation Disabled!**")
+            message.stop_propagation()
+            return
+        
+        # /blockforward
+        if _is_cmd(text, "blockforward"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only admins can change this!")
+                message.stop_propagation()
+                return
+            
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            current = moderation_config[chat_id].get("block_forward", False)
+            moderation_config[chat_id]["block_forward"] = not current
+            moderation_config[chat_id]["enabled"] = True
+            save_moderation_config(chat_id)
+            
+            status = "🟢 ON" if not current else "🔴 OFF"
+            await message.reply(f"📨 **Block Forwarded Messages:** {status}")
+            message.stop_propagation()
+            return
+        
+        # /blocklinks
+        if _is_cmd(text, "blocklinks"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only admins can change this!")
+                message.stop_propagation()
+                return
+            
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            current = moderation_config[chat_id].get("block_links", False)
+            moderation_config[chat_id]["block_links"] = not current
+            moderation_config[chat_id]["enabled"] = True
+            save_moderation_config(chat_id)
+            
+            status = "🟢 ON" if not current else "🔴 OFF"
+            await message.reply(f"🔗 **Block Links/URLs:** {status}")
+            message.stop_propagation()
+            return
+        
+        # /blockbadwords
+        if _is_cmd(text, "blockbadwords"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only admins can change this!")
+                message.stop_propagation()
+                return
+            
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            current = moderation_config[chat_id].get("block_badwords", False)
+            moderation_config[chat_id]["block_badwords"] = not current
+            moderation_config[chat_id]["enabled"] = True
+            save_moderation_config(chat_id)
+            
+            status = "🟢 ON" if not current else "🔴 OFF"
+            await message.reply(f"🤬 **Block Bad Words:** {status}")
+            message.stop_propagation()
+            return
+        
+        # /blockmention
+        if _is_cmd(text, "blockmention"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only admins can change this!")
+                message.stop_propagation()
+                return
+            
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            current = moderation_config[chat_id].get("block_mention", False)
+            moderation_config[chat_id]["block_mention"] = not current
+            moderation_config[chat_id]["enabled"] = True
+            save_moderation_config(chat_id)
+            
+            status = "🟢 ON" if not current else "🔴 OFF"
+            await message.reply(f"📢 **Block @Mentions:** {status}")
+            message.stop_propagation()
+            return
+        
+        # /autodelete2min
+        if _is_cmd(text, "autodelete2min"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only admins can change this!")
+                message.stop_propagation()
+                return
+            
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            current = moderation_config[chat_id].get("auto_delete_2min", False)
+            moderation_config[chat_id]["auto_delete_2min"] = not current
+            moderation_config[chat_id]["enabled"] = True
+            save_moderation_config(chat_id)
+            
+            status = "🟢 ON" if not current else "🔴 OFF"
+            await message.reply(f"⏱️ **Auto-Delete After 2 Minutes:** {status}")
+            message.stop_propagation()
+            return
+        
+        # /modstatus
+        if _is_cmd(text, "modstatus"):
+            if chat_id not in moderation_config:
+                moderation_config[chat_id] = load_moderation_config(chat_id)
+            cfg = moderation_config[chat_id]
+            
+            await message.reply(
+                "🛡️ **Moderation Status**\n\n"
+                f"**Enabled:** {'🟢 YES' if cfg.get('enabled') else '🔴 NO'}\n"
+                f"**Block Forwards:** {'🟢 ON' if cfg.get('block_forward') else '🔴 OFF'}\n"
+                f"**Block Links:** {'🟢 ON' if cfg.get('block_links') else '🔴 OFF'}\n"
+                f"**Block Bad Words:** {'🟢 ON' if cfg.get('block_badwords') else '🔴 OFF'}\n"
+                f"**Block Mentions:** {'🟢 ON' if cfg.get('block_mention') else '🔴 OFF'}\n"
+                f"**Auto-Delete 2min:** {'🟢 ON' if cfg.get('auto_delete_2min') else '🔴 OFF'}"
+            )
+            message.stop_propagation()
+            return
+        
+        # /setforcejoin
+        if _is_cmd(text, "setforcejoin"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only group admins can set force join!")
+                message.stop_propagation()
+                return
+            
+            # Parse channel from command
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2:
+                await message.reply(
+                    "❌ Usage: `/setforcejoin @channel_username`\n\n"
+                    "Example: `/setforcejoin @MyChannel`"
+                )
+                message.stop_propagation()
+                return
+            
+            channel_input = parts[1].strip()
+            if not channel_input.startswith("@"):
+                channel_input = "@" + channel_input
+            
+            try:
+                channel_info = await client.get_chat(channel_input)
+                channel_id = str(channel_info.id)
+                channel_name = channel_info.title or channel_input
+                invite_link = channel_info.invite_link or f"https://t.me/{channel_input.replace('@', '')}"
+                
+                config = {
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "invite_link": invite_link
+                }
+                group_forcejoin_config[chat_id] = config
+                
+                if group_forcejoin_col:
+                    group_forcejoin_col.update_one(
+                        {"chat_id": chat_id},
+                        {"$set": config},
+                        upsert=True
+                    )
+                
+                await message.reply(
+                    f"✅ **Force Join Set!**\n\n"
+                    f"Channel: {channel_name}\n"
+                    f"Link: {invite_link}\n\n"
+                    "Users who haven't joined will have messages deleted."
+                )
+            except Exception as e:
+                await message.reply(f"❌ Failed to set force join: {e}")
+            
+            message.stop_propagation()
+            return
+        
+        # /removeforcejoin
+        if _is_cmd(text, "removeforcejoin"):
+            is_admin, user_id = await check_group_admin(client, message)
+            if not is_admin:
+                await message.reply("❌ Only group admins can remove force join!")
+                message.stop_propagation()
+                return
+            
+            if chat_id in group_forcejoin_config:
+                del group_forcejoin_config[chat_id]
+            
+            if group_forcejoin_col:
+                group_forcejoin_col.delete_one({"chat_id": chat_id})
+            
+            await message.reply("✅ **Force Join Removed!**\n\nUsers can now send messages without joining.")
+            message.stop_propagation()
+            return
+        
+        # /forcejoininfo
+        if _is_cmd(text, "forcejoininfo"):
+            config = group_forcejoin_config.get(chat_id)
+            if config:
+                await message.reply(
+                    f"🔐 **Force Join Info**\n\n"
+                    f"Channel: {config.get('channel_name', 'Unknown')}\n"
+                    f"Link: {config.get('invite_link', 'N/A')}"
+                )
+            else:
+                await message.reply("ℹ️ No force join configured for this group.\n\nUse `/setforcejoin @channel` to set one.")
             message.stop_propagation()
             return
 
