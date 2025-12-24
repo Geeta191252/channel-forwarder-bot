@@ -1261,25 +1261,39 @@ def register_bot_handlers():
             return False
         return re.match(rf"^/{cmd}(?:@[A-Za-z0-9_]+)?(?:\s|$)", text.strip(), re.IGNORECASE) is not None
 
-    @bot_client.on_message(filters.text)
+    @bot_client.on_message(filters.text, group=-10)
     async def ping_whoami_text_router(client, message):
-        """Reliable group/private command handling even when Telegram appends @BotUsername."""
+        """
+        Reliable group/private command handling for /start, /ping, /whoami even when
+        Telegram appends @BotUsername.
+        
+        IMPORTANT: Uses group=-10 (runs early) and does NOT call message.stop_propagation()
+        for unhandled commands, so other handlers (like /enablemod) can still process them.
+        """
         text = getattr(message, "text", "") or ""
 
         if _is_cmd(text, "start"):
-            return await handle_start(client, message)
+            await handle_start(client, message)
+            message.stop_propagation()
+            return
 
         if _is_cmd(text, "ping"):
-            return await message.reply("✅ Pong")
+            await message.reply("✅ Pong")
+            message.stop_propagation()
+            return
 
         if _is_cmd(text, "whoami"):
             try:
                 me = await client.get_me()
                 uname = getattr(me, "username", "") or ""
                 uid = getattr(me, "id", "")
-                return await message.reply(f"🤖 Running as: @{uname}\n🆔 Bot ID: `{uid}`")
+                await message.reply(f"🤖 Running as: @{uname}\n🆔 Bot ID: `{uid}`")
             except Exception as e:
-                return await message.reply(f"❌ whoami failed: {e}")
+                await message.reply(f"❌ whoami failed: {e}")
+            message.stop_propagation()
+            return
+
+        # For all other messages/commands, do NOT stop propagation so other handlers can process them
 
 
     @bot_client.on_message(filters.command(["myid", "checkadmin"]))
