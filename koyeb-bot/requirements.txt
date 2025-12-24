@@ -4,6 +4,6 @@ flask==3.0.0
 python-dotenv==1.0.0
 pymongo==4.6.1
 gunicorn==21.2.0
-Pillow==10.2.0
+Pillow>=10.4.0
 aiohttp==3.9.5
 
