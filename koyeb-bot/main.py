@@ -7,6 +7,9 @@ import signal
 from datetime import datetime
 from flask import Flask, request, jsonify
 from pyrogram import Client, filters, idle
+# Backward/forward compatibility: some builds may reference filters.supergroup
+if not hasattr(filters, "supergroup"):
+    filters.supergroup = filters.group
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatType, ChatMemberStatus
 from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate, MessageNotModified
