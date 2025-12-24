@@ -12,5 +12,6 @@ COPY main.py .
 # Expose port
 EXPOSE 8000
 
-# Run the bot
-CMD ["python", "main.py"]
+# Run unbuffered so startup logs (ENV CHECK etc.) appear immediately on hosts
+CMD ["python", "-u", "main.py"]
+

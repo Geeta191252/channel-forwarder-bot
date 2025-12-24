@@ -5,9 +5,18 @@ import asyncio
 import time
 import io
 import signal
+import sys
 from datetime import datetime
 from flask import Flask, request, jsonify
 from pyrogram import Client, filters, idle
+
+# Ensure logs are not buffered (so Koyeb shows ENV CHECK / bot start logs)
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 # Backward/forward compatibility: some builds may reference filters.supergroup
 if not hasattr(filters, "supergroup"):
     filters.supergroup = filters.group
@@ -24,7 +33,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 # Build marker (changes on each code update) to verify Koyeb is running the latest image
 BUILD_MARKER = "2025-12-24T22:20:00Z"
-print(f"✅ BOT BUILD_MARKER: {BUILD_MARKER}")
+print(f"✅ BOT BUILD_MARKER: {BUILD_MARKER}", flush=True)
 
 load_dotenv()
 flask_app = Flask(__name__)
