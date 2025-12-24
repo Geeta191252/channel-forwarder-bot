@@ -19,7 +19,7 @@ import threading
 from PIL import Image, ImageDraw, ImageFont
 
 # Build marker (changes on each code update) to verify Koyeb is running the latest image
-BUILD_MARKER = "2025-12-24T22:07:00Z"
+BUILD_MARKER = "2025-12-24T22:20:00Z"
 print(f"✅ BOT BUILD_MARKER: {BUILD_MARKER}")
 
 load_dotenv()
