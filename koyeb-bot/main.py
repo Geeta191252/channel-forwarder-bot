@@ -1266,6 +1266,9 @@ def register_bot_handlers():
         """Reliable group/private command handling even when Telegram appends @BotUsername."""
         text = getattr(message, "text", "") or ""
 
+        if _is_cmd(text, "start"):
+            return await handle_start(client, message)
+
         if _is_cmd(text, "ping"):
             return await message.reply("✅ Pong")
 
@@ -1320,8 +1323,8 @@ def register_bot_handlers():
             "Use /enablepublic to enable public access."
         )
     
-    @bot_client.on_message(filters.command("start"))
-    async def start_handler(client, message):
+    async def handle_start(client, message):
+        """Handle /start consistently (works even if filters.command isn't firing)."""
         # Debug: confirm bot is receiving updates
         try:
             chat_id = getattr(message.chat, "id", None)
@@ -1344,8 +1347,7 @@ def register_bot_handlers():
             print(f"⚠️ get_me() failed in /start: {e}")
 
         # Parse referral code from /start ref_USERID
-        referrer_id = None
-        if len(message.command) > 1:
+        if hasattr(message, "command") and message.command and len(message.command) > 1:
             param = message.command[1]
             if param.startswith("ref_"):
                 try:
@@ -1355,65 +1357,68 @@ def register_bot_handlers():
                         add_referral(user_id, referrer_id)
                 except Exception:
                     pass
-        
+
         # Check if user is admin (skip all requirements)
         if is_admin(user_id):
             return await show_main_menu(client, message)
-        
+
         # Check public access - if disabled, only admins can use bot
         if not public_access_enabled:
-            await message.reply(
-                "🔒 **Bot is Private Mode**\n\n"
-                "This bot is currently in private mode.\n"
-                "Only admins can use it.\n\n"
-                "Please wait until admin enables public access."
-            )
+            try:
+                await message.reply(
+                    "🔒 **Bot is Private Mode**\n\n"
+                    "This bot is currently in private mode.\n"
+                    "Only admins can use it.\n\n"
+                    "Admin ko bolo /enablepublic run kare (private chat me)."
+                )
+            except Exception as e:
+                print(f"❌ Failed to reply private-mode message: {e}")
             return
-        
+
         # Check force subscribe first
         if force_subscribe_channels:
             is_joined, not_joined = await check_user_joined(client, user_id)
-            
+
             if not is_joined:
                 # Show force subscribe message
                 buttons = []
                 for idx, channel in enumerate(not_joined):
                     link = channel.get("invite_link") or f"https://t.me/{channel['channel_id'].replace('@', '')}"
                     buttons.append([InlineKeyboardButton(f"📢 Join {channel['channel_name']}", url=link)])
-                
+
                 buttons.append([InlineKeyboardButton("✅ Joined All - Verify", callback_data="check_joined")])
-                
+
                 await message.reply(
                     "🔐 **Join Required!**\n\n"
                     "To use this bot, you must join the following channels/groups:\n\n"
                     f"📢 **{len(not_joined)} channel(s) remaining**\n\n"
                     "👇 Click below to join, then click **Verify**:",
-                    reply_markup=InlineKeyboardMarkup(buttons)
+                    reply_markup=InlineKeyboardMarkup(buttons),
                 )
                 return
-        
+
         # Check referral requirement
         ref_count = get_referral_count(user_id)
         if ref_count < REQUIRED_REFERRALS:
             ref_link = get_referral_link(bot_username, user_id)
             remaining = REQUIRED_REFERRALS - ref_count
-            
+
             await message.reply(
                 f"👥 **Referral Required!**\n\n"
                 f"You need to invite **{REQUIRED_REFERRALS} users** to use this bot.\n\n"
                 f"✅ Your referrals: **{ref_count}/{REQUIRED_REFERRALS}**\n"
                 f"❌ Remaining: **{remaining}**\n\n"
                 f"📤 **Your Referral Link:**\n`{ref_link}`\n\n"
-                f"Share this link with friends. When they start the bot using your link, you get +1 referral!",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Check Again", callback_data="check_referrals")]
-                ])
+                "Share this link with friends. When they start the bot using your link, you get +1 referral!",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🔄 Check Again", callback_data="check_referrals")]]
+                ),
             )
             return
-        
+
         # User passed all checks - show main menu
         await show_main_menu(client, message)
-    
+
     async def show_main_menu(client, message):
         """Show main menu to user"""
         num_accounts = len(user_clients)
