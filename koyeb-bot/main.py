@@ -87,6 +87,19 @@ API_ID = os.getenv("API_ID", "")
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = (os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 
+# Startup env sanity checks (helps debug "bot not responding" issues on hosts)
+print(
+    "🔎 ENV CHECK | "
+    f"API_ID={'✅' if bool(API_ID) else '❌'} "
+    f"API_HASH={'✅' if bool(API_HASH) else '❌'} "
+    f"BOT_TOKEN={'✅' if bool(BOT_TOKEN) else '❌'} "
+    f"SESSION_STRING={'✅' if bool(os.getenv('SESSION_STRING','')) else '❌'}"
+)
+if not BOT_TOKEN:
+    print("⚠️ BOT_TOKEN missing: bot commands like /start will NOT work. Add BOT_TOKEN in your host environment variables.")
+if not API_ID or not API_HASH:
+    print("⚠️ API_ID/API_HASH missing: Pyrogram bot client cannot start. Add API_ID and API_HASH in your host environment variables.")
+
 def get_all_session_strings():
     """Get all SESSION_STRING environment variables dynamically"""
     sessions = []
