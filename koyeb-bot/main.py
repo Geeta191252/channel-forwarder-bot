@@ -1101,6 +1101,65 @@ async def wizard_forward_messages(user_id, source_channel, dest_channel, skip_nu
         forward_wizard_state.pop(user_id, None)
 
 
+async def start_bot_client():
+    """Start the bot client (commands like /start)."""
+    global bot_client
+
+    if not (BOT_TOKEN and API_ID and API_HASH):
+        print("⚠️ Bot client not starting: missing BOT_TOKEN/API_ID/API_HASH")
+        return
+
+    bot_client = Client(
+        "bot_session",
+        api_id=int(API_ID),
+        api_hash=API_HASH,
+        bot_token=BOT_TOKEN,
+    )
+
+    # Register handlers BEFORE starting (required for Pyrogram polling)
+    register_bot_handlers()
+    print("📝 Bot handlers registered")
+
+    # Start with FloodWait handling (Telegram can rate-limit frequent restarts)
+    for attempt in range(1, 6):
+        try:
+            await bot_client.start()
+
+            # Ensure Bot API webhook is disabled so polling works
+            try:
+                await bot_client.delete_webhook(drop_pending_updates=True)
+                print("🔄 Bot webhook cleared (polling mode active)")
+            except Exception as wh_err:
+                print(f"⚠️ Could not clear webhook via bot client: {wh_err}")
+
+            try:
+                me = await bot_client.get_me()
+                uname = getattr(me, "username", "") or ""
+                uid = getattr(me, "id", "")
+                print(f"🤖 Bot client started as @{uname} (id={uid}) - now listening for messages!")
+
+                # Optional startup self-test message
+                admin_chat_id = (os.getenv("ADMIN_CHAT_ID") or "").strip()
+                if admin_chat_id:
+                    try:
+                        await bot_client.send_message(int(admin_chat_id), f"✅ Bot started: @{uname} (id={uid})")
+                        print(f"📨 Startup self-test sent to ADMIN_CHAT_ID={admin_chat_id}")
+                    except Exception as send_err:
+                        print(f"⚠️ Startup self-test failed: {send_err}")
+            except Exception as info_err:
+                print(f"⚠️ Bot started but get_me/self-test failed: {info_err}")
+
+            return
+        except FloodWait as e:
+            wait_s = int(getattr(e, "value", 0) or 0)
+            wait_s = max(wait_s, 10)
+            print(f"⏳ FloodWait while starting bot: waiting {wait_s}s (attempt {attempt}/5)")
+            await asyncio.sleep(wait_s)
+        except Exception as e:
+            print(f"❌ Failed to start bot client: {e}")
+            raise
+
+
 async def init_clients():
     """Initialize Pyrogram clients - supports unlimited accounts!"""
     global user_clients, bot_client, auto_approve_channels
@@ -1119,15 +1178,17 @@ async def init_clients():
     # Load logo config from database
     load_logo_config()
     if logo_config.get("enabled"):
-        print(f"🖼️ Logo watermark enabled")
+        print("🖼️ Logo watermark enabled")
 
     # Load public access setting from database
     load_public_access()
     print(f"🌐 Public access: {'✅ ENABLED' if public_access_enabled else '❌ DISABLED (Only admins)'}")
 
+    # IMPORTANT: Start bot client ASAP so /start works even if MTProto sessions take time
+    await start_bot_client()
+
     # Get all session strings from environment
     session_strings = get_all_session_strings()
-
     print(f"🔍 Found {len(session_strings)} session string(s)")
 
     # Initialize user clients for fast forwarding (MTProto)
@@ -1167,65 +1228,12 @@ async def init_clients():
                     break
 
     print(f"🚀 Total active accounts: {len(user_clients)}")
-    
-    print(f"🚀 Total active accounts: {len(user_clients)}")
-    
+
     # Calculate expected speed
     if user_clients:
         expected_speed = len(user_clients) * 30  # ~30 msgs/min per account
         print(f"⚡ Expected forwarding speed: ~{expected_speed}/min")
-    
-    # Bot client for commands
-    if BOT_TOKEN and API_ID and API_HASH:
-        bot_client = Client(
-            "bot_session",
-            api_id=int(API_ID),
-            api_hash=API_HASH,
-            bot_token=BOT_TOKEN
-        )
 
-        # Register handlers BEFORE starting (required for Pyrogram polling)
-        register_bot_handlers()
-        print("📝 Bot handlers registered")
-
-        # Start with FloodWait handling (Telegram can rate-limit frequent restarts)
-        for attempt in range(1, 6):
-            try:
-                await bot_client.start()
-
-                # Ensure Bot API webhook is disabled so polling works (common reason for "bot not responding")
-                try:
-                    await bot_client.delete_webhook(drop_pending_updates=True)
-                    print("🔄 Bot webhook cleared (polling mode active)")
-                except Exception as wh_err:
-                    print(f"⚠️ Could not clear webhook via bot client: {wh_err}")
-
-                try:
-                    me = await bot_client.get_me()
-                    uname = getattr(me, "username", "") or ""
-                    uid = getattr(me, "id", "")
-                    print(f"🤖 Bot client started as @{uname} (id={uid}) - now listening for messages!")
-
-                    # Optional startup self-test message
-                    admin_chat_id = (os.getenv("ADMIN_CHAT_ID") or "").strip()
-                    if admin_chat_id:
-                        try:
-                            await bot_client.send_message(int(admin_chat_id), f"✅ Bot started: @{uname} (id={uid})")
-                            print(f"📨 Startup self-test sent to ADMIN_CHAT_ID={admin_chat_id}")
-                        except Exception as send_err:
-                            print(f"⚠️ Startup self-test failed: {send_err}")
-                except Exception as info_err:
-                    print(f"⚠️ Bot started but get_me/self-test failed: {info_err}")
-
-                break
-            except FloodWait as e:
-                wait_s = int(getattr(e, "value", 0) or 0)
-                wait_s = max(wait_s, 10)
-                print(f"⏳ FloodWait while starting bot: waiting {wait_s}s (attempt {attempt}/5)")
-                await asyncio.sleep(wait_s)
-            except Exception as e:
-                print(f"❌ Failed to start bot client: {e}")
-                raise
 
 
 def register_bot_handlers():
