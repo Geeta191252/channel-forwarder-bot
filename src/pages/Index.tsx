@@ -3,6 +3,7 @@ import { Bot } from "lucide-react";
 import { BotConfig } from "@/components/BotConfig";
 import { StatusCard } from "@/components/StatusCard";
 import { BulkForward } from "@/components/BulkForward";
+import { ForceJoin } from "@/components/ForceJoin";
 import { supabase } from "@/integrations/supabase/client";
 
 const Index = () => {
@@ -70,6 +71,8 @@ const Index = () => {
               destChannel={config.destChannel}
             />
           )}
+
+          <ForceJoin />
         </div>
 
         <footer className="mt-8 text-center text-sm text-muted-foreground">
