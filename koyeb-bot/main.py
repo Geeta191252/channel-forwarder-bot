@@ -4081,33 +4081,45 @@ def register_bot_handlers():
         # Skip if user is admin/owner (admins are exempt from moderation)
         try:
             member = await client.get_chat_member(chat_id, user_id)
-
-            # Very reliable across versions: member class name
-            cls = getattr(member, "__class__", None)
-            cls_name = ("" if cls is None else getattr(cls, "__name__", "")).lower()
-            if any(t in cls_name for t in ("administrator", "admin", "owner")):
+            
+            # Check if user is admin or owner using multiple methods
+            is_admin_or_owner = False
+            
+            # Method 1: Check class name (ChatMemberOwner, ChatMemberAdministrator)
+            cls_name = member.__class__.__name__ if member else ""
+            if "Owner" in cls_name or "Administrator" in cls_name or "Admin" in cls_name:
+                is_admin_or_owner = True
+            
+            # Method 2: Check if privileges exist (admins have this)
+            if not is_admin_or_owner and hasattr(member, "privileges") and member.privileges is not None:
+                is_admin_or_owner = True
+            
+            # Method 3: Check status attribute (covers various Pyrogram versions)
+            if not is_admin_or_owner and hasattr(member, "status"):
+                status = member.status
+                # Handle both enum and string status
+                status_str = str(status.value if hasattr(status, "value") else status).lower()
+                if any(x in status_str for x in ["creator", "owner", "admin", "administrator"]):
+                    is_admin_or_owner = True
+            
+            # Method 4: Direct ChatMember type check using pyrogram types
+            if not is_admin_or_owner:
+                try:
+                    from pyrogram.types import ChatMemberOwner, ChatMemberAdministrator
+                    if isinstance(member, (ChatMemberOwner, ChatMemberAdministrator)):
+                        is_admin_or_owner = True
+                except ImportError:
+                    pass
+            
+            if is_admin_or_owner:
                 return
-
-            # Reliable for admins: privileges object exists
-            if getattr(member, "privileges", None) is not None:
-                return
-
-            # Normalize member status across versions (owner is often "creator")
-            raw_status = getattr(member, "status", None)
-            status_value = getattr(raw_status, "value", raw_status)
-            status_str = ("" if status_value is None else str(status_value)).lower()
-
-            if any(t in status_str for t in ("admin", "administrator", "owner", "creator")):
-                return
-
-            # Debug (only when it reaches here): helps identify why owner/admin not detected
-            print(
-                f"[DEBUG] moderation: not-exempt user_id={user_id} chat_id={chat_id} cls={cls_name} status={status_str} privileges={getattr(member,'privileges',None) is not None}",
-                flush=True,
-            )
+            
+            # Debug log for non-exempt users
+            print(f"[DEBUG] moderation: user_id={user_id} cls={cls_name} is_admin={is_admin_or_owner}", flush=True)
+            
         except Exception as e:
-            # If we can't verify role (permissions/API hiccup), avoid false warnings/bans
-            print(f"[DEBUG] Unable to verify member status for {user_id} in {chat_id}: {e}", flush=True)
+            # If we can't verify role, skip moderation to avoid false warnings
+            print(f"[DEBUG] Cannot verify admin status for {user_id}: {e}", flush=True)
             return
         
         async def add_warning_and_check_ban(reason):
