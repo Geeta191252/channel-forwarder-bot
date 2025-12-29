@@ -4081,22 +4081,18 @@ def register_bot_handlers():
         try:
             member = await client.get_chat_member(chat_id, user_id)
 
+            # Most reliable: admins/owners have privileges object in Pyrogram
+            if getattr(member, "privileges", None) is not None:
+                return
+
             # Normalize member status across Pyrogram versions
             raw_status = getattr(member, "status", None)
             status_value = getattr(raw_status, "value", raw_status)
             status_str = ("" if status_value is None else str(status_value)).lower()
 
             # Accept both enum and string variants (owner is often "creator")
-            if raw_status == ChatMemberStatus.ADMINISTRATOR or raw_status == ChatMemberStatus.OWNER:
+            if any(t in status_str for t in ("admin", "administrator", "owner", "creator")):
                 return
-
-            # Some versions stringify like "ChatMemberStatus.CREATOR"; use contains-check
-            if any(t in status_str for t in ("admin", "owner", "creator")):
-                return
-        except Exception as e:
-            # If we can't verify role (permissions/API hiccup), avoid false warnings/bans
-            print(f"[DEBUG] Unable to verify member status for {user_id} in {chat_id}: {e}", flush=True)
-            return
         except Exception as e:
             # If we can't verify role (permissions/API hiccup), avoid false warnings/bans
             print(f"[DEBUG] Unable to verify member status for {user_id} in {chat_id}: {e}", flush=True)
