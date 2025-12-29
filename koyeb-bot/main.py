@@ -4064,17 +4064,23 @@ def register_bot_handlers():
         if not config.get("enabled"):
             return
         
-        # Skip if user is admin (admins are exempt from moderation)
-        try:
-            member = await client.get_chat_member(chat_id, user_id)
-            if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                return  # Admin exempt from moderation
-        except:
-            pass
-        
-        # Also skip if user is a bot admin
+        # Skip if user is a bot admin first
         if user_id in ADMIN_IDS:
             return
+        
+        # Skip if user is admin/owner (admins are exempt from moderation)
+        try:
+            member = await client.get_chat_member(chat_id, user_id)
+            # Check using enum comparison
+            if member.status == ChatMemberStatus.ADMINISTRATOR or member.status == ChatMemberStatus.OWNER:
+                return  # Admin exempt from moderation
+            # Also check string value as fallback for compatibility
+            status_str = str(member.status).lower()
+            if "admin" in status_str or "owner" in status_str or "creator" in status_str:
+                return  # Admin exempt from moderation
+        except Exception as e:
+            print(f"[DEBUG] Error checking admin status for {user_id} in {chat_id}: {e}", flush=True)
+            pass
         
         async def add_warning_and_check_ban(reason):
             """Add warning to user and ban if exceeded limit"""
