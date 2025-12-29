@@ -4064,13 +4064,17 @@ def register_bot_handlers():
         if not config.get("enabled"):
             return
         
-        # Skip if user is admin
+        # Skip if user is admin (admins are exempt from moderation)
         try:
             member = await client.get_chat_member(chat_id, user_id)
-            if member.status in ["administrator", "creator"]:
-                return
+            if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                return  # Admin exempt from moderation
         except:
             pass
+        
+        # Also skip if user is a bot admin
+        if user_id in ADMIN_IDS:
+            return
         
         async def add_warning_and_check_ban(reason):
             """Add warning to user and ban if exceeded limit"""
