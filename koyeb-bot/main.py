@@ -4053,11 +4053,12 @@ def register_bot_handlers():
         
         chat_id = message.chat.id
         
-        # If message is sent as the chat itself (anonymous admin), skip moderation to avoid false warnings
-        if getattr(message, "sender_chat", None) is not None and getattr(message.sender_chat, "id", None) == chat_id:
+        # If message is sent via sender_chat (anonymous admin / channel identity), skip moderation
+        # Admins/owners can post as the group/channel; treating these as exempt avoids false warnings.
+        if getattr(message, "sender_chat", None) is not None:
             return
 
-        # If we can't identify a user (e.g. anonymous), do not moderate
+        # If we can't identify a user, do not moderate
         if message.from_user is None:
             return
 
@@ -4081,18 +4082,29 @@ def register_bot_handlers():
         try:
             member = await client.get_chat_member(chat_id, user_id)
 
-            # Most reliable: admins/owners have privileges object in Pyrogram
+            # Very reliable across versions: member class name
+            cls = getattr(member, "__class__", None)
+            cls_name = ("" if cls is None else getattr(cls, "__name__", "")).lower()
+            if any(t in cls_name for t in ("administrator", "admin", "owner")):
+                return
+
+            # Reliable for admins: privileges object exists
             if getattr(member, "privileges", None) is not None:
                 return
 
-            # Normalize member status across Pyrogram versions
+            # Normalize member status across versions (owner is often "creator")
             raw_status = getattr(member, "status", None)
             status_value = getattr(raw_status, "value", raw_status)
             status_str = ("" if status_value is None else str(status_value)).lower()
 
-            # Accept both enum and string variants (owner is often "creator")
             if any(t in status_str for t in ("admin", "administrator", "owner", "creator")):
                 return
+
+            # Debug (only when it reaches here): helps identify why owner/admin not detected
+            print(
+                f"[DEBUG] moderation: not-exempt user_id={user_id} chat_id={chat_id} cls={cls_name} status={status_str} privileges={getattr(member,'privileges',None) is not None}",
+                flush=True,
+            )
         except Exception as e:
             # If we can't verify role (permissions/API hiccup), avoid false warnings/bans
             print(f"[DEBUG] Unable to verify member status for {user_id} in {chat_id}: {e}", flush=True)
