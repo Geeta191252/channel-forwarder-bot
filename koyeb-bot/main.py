@@ -4052,6 +4052,15 @@ def register_bot_handlers():
         global moderation_stats, user_warnings
         
         chat_id = message.chat.id
+        
+        # If message is sent as the chat itself (anonymous admin), skip moderation to avoid false warnings
+        if getattr(message, "sender_chat", None) is not None and getattr(message.sender_chat, "id", None) == chat_id:
+            return
+
+        # If we can't identify a user (e.g. anonymous), do not moderate
+        if message.from_user is None:
+            return
+
         user_id = message.from_user.id
         
         # Load config if not in memory
@@ -4080,8 +4089,14 @@ def register_bot_handlers():
             # Accept both enum and string variants (owner is often "creator")
             if raw_status == ChatMemberStatus.ADMINISTRATOR or raw_status == ChatMemberStatus.OWNER:
                 return
-            if status_str in ("administrator", "creator", "owner"):
+
+            # Some versions stringify like "ChatMemberStatus.CREATOR"; use contains-check
+            if any(t in status_str for t in ("admin", "owner", "creator")):
                 return
+        except Exception as e:
+            # If we can't verify role (permissions/API hiccup), avoid false warnings/bans
+            print(f"[DEBUG] Unable to verify member status for {user_id} in {chat_id}: {e}", flush=True)
+            return
         except Exception as e:
             # If we can't verify role (permissions/API hiccup), avoid false warnings/bans
             print(f"[DEBUG] Unable to verify member status for {user_id} in {chat_id}: {e}", flush=True)
