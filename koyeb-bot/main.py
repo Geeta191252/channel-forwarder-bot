@@ -4071,16 +4071,21 @@ def register_bot_handlers():
         # Skip if user is admin/owner (admins are exempt from moderation)
         try:
             member = await client.get_chat_member(chat_id, user_id)
-            # Check using enum comparison
-            if member.status == ChatMemberStatus.ADMINISTRATOR or member.status == ChatMemberStatus.OWNER:
-                return  # Admin exempt from moderation
-            # Also check string value as fallback for compatibility
-            status_str = str(member.status).lower()
-            if "admin" in status_str or "owner" in status_str or "creator" in status_str:
-                return  # Admin exempt from moderation
+
+            # Normalize member status across Pyrogram versions
+            raw_status = getattr(member, "status", None)
+            status_value = getattr(raw_status, "value", raw_status)
+            status_str = ("" if status_value is None else str(status_value)).lower()
+
+            # Accept both enum and string variants (owner is often "creator")
+            if raw_status == ChatMemberStatus.ADMINISTRATOR or raw_status == ChatMemberStatus.OWNER:
+                return
+            if status_str in ("administrator", "creator", "owner"):
+                return
         except Exception as e:
-            print(f"[DEBUG] Error checking admin status for {user_id} in {chat_id}: {e}", flush=True)
-            pass
+            # If we can't verify role (permissions/API hiccup), avoid false warnings/bans
+            print(f"[DEBUG] Unable to verify member status for {user_id} in {chat_id}: {e}", flush=True)
+            return
         
         async def add_warning_and_check_ban(reason):
             """Add warning to user and ban if exceeded limit"""
