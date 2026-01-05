@@ -3891,7 +3891,7 @@ def register_bot_handlers():
         & ~filters.regex(
             r"^/(setjoinwait|removejoinwait|joinwaitstatus|setforcejoin|removeforcejoin|forcejoininfo|enablemod|disablemod|blockforward|blocklinks|blockbadwords|blockmention|autodelete2min|modstatus|warnings|resetwarnings)(?:@[A-Za-z0-9_]+)?(?:\s|$)"
         ),
-        group=0,
+        group=-10,
     )
     async def new_member_wait_filter(client, message):
         """Block messages from ALL users until join count is met - instant delete"""
@@ -3935,11 +3935,16 @@ def register_bot_handlers():
         
         # User hasn't added enough members yet - delete as fast as possible
         try:
-            # FAST PATH: delete first, before any other API calls
-            await message.delete()
+            # ULTRA FAST PATH: fire-and-forget delete, don't wait
+            asyncio.create_task(message.delete())
         except Exception as e:
-            # If we can't delete (missing perms), don't block processing
             print(f"JoinWait delete failed: {e}")
+
+        # Stop other handlers immediately (reduces extra processing)
+        try:
+            message.stop_propagation()
+        except Exception:
+            pass
 
         async def _notify_joinwait():
             try:
