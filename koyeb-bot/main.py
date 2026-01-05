@@ -60,9 +60,14 @@ force_sub_col = db["force_subscribe"] if db is not None else None
 referrals_col = db["referrals"] if db is not None else None
 bot_settings_col = db["bot_settings"] if db is not None else None
 group_forcejoin_col = db["group_forcejoin"] if db is not None else None  # Force join config per group
+new_member_wait_col = db["new_member_wait"] if db is not None else None  # New member wait config per group
+restricted_new_users_col = db["restricted_new_users"] if db is not None else None  # Track restricted new users
 
 # Force join config per group: {chat_id: {"channel_id": "", "channel_name": "", "invite_link": ""}}
 group_forcejoin_config = {}
+
+# New member wait config: {chat_id: {"enabled": True, "required_joins": 3, "pending_users": [user_ids]}}
+new_member_wait_config = {}
 
 # Public access control
 public_access_enabled = False  # Default: only admins can use bot
@@ -3522,6 +3527,348 @@ def register_bot_handlers():
                 }},
                 upsert=True
             )
+    
+    # ============ NEW MEMBER WAIT FUNCTIONS ============
+    
+    def load_new_member_wait(chat_id):
+        """Load new member wait config from database"""
+        global new_member_wait_config
+        if new_member_wait_col is not None:
+            saved = new_member_wait_col.find_one({"chat_id": chat_id})
+            if saved:
+                new_member_wait_config[chat_id] = {
+                    "enabled": saved.get("enabled", False),
+                    "required_joins": saved.get("required_joins", 3),
+                    "join_count": saved.get("join_count", 0)
+                }
+                return new_member_wait_config[chat_id]
+        return {"enabled": False, "required_joins": 3, "join_count": 0}
+    
+    def save_new_member_wait(chat_id):
+        """Save new member wait config to database"""
+        if new_member_wait_col is not None and chat_id in new_member_wait_config:
+            new_member_wait_col.update_one(
+                {"chat_id": chat_id},
+                {"$set": {
+                    **new_member_wait_config[chat_id],
+                    "chat_id": chat_id,
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
+    
+    def add_restricted_user(chat_id, user_id):
+        """Add a user to restricted list (waiting for N members to join)"""
+        if restricted_new_users_col is not None:
+            restricted_new_users_col.update_one(
+                {"chat_id": chat_id, "user_id": user_id},
+                {"$set": {
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "added_at": datetime.utcnow(),
+                    "is_restricted": True
+                }},
+                upsert=True
+            )
+    
+    def is_user_restricted(chat_id, user_id):
+        """Check if user is in restricted list"""
+        if restricted_new_users_col is not None:
+            doc = restricted_new_users_col.find_one({"chat_id": chat_id, "user_id": user_id, "is_restricted": True})
+            return doc is not None
+        return False
+    
+    def unrestrict_all_users(chat_id):
+        """Unrestrict all users in a chat when required joins are met"""
+        if restricted_new_users_col is not None:
+            restricted_new_users_col.update_many(
+                {"chat_id": chat_id, "is_restricted": True},
+                {"$set": {"is_restricted": False, "unrestricted_at": datetime.utcnow()}}
+            )
+    
+    def get_restricted_user_count(chat_id):
+        """Get count of restricted users"""
+        if restricted_new_users_col is not None:
+            return restricted_new_users_col.count_documents({"chat_id": chat_id, "is_restricted": True})
+        return 0
+    
+    # ============ NEW MEMBER WAIT COMMANDS ============
+    
+    @bot_client.on_message(filters.command("setjoinwait") & GROUP_CHAT)
+    async def setjoinwait_handler(client, message):
+        """Set how many members must join before new users can message"""
+        global new_member_wait_config
+        
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+        
+        # Check if admin
+        is_bot_admin = bool(user_id and user_id in ADMIN_IDS)
+        is_group_admin = False
+        
+        if message.sender_chat and message.sender_chat.id == chat_id:
+            is_group_admin = True
+        elif user_id:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                cls_name = member.__class__.__name__ if member else ""
+                if "Owner" in cls_name or "Administrator" in cls_name or "Admin" in cls_name:
+                    is_group_admin = True
+                elif hasattr(member, "status"):
+                    status = member.status
+                    status_str = str(status.value if hasattr(status, "value") else status).lower()
+                    if any(x in status_str for x in ["creator", "owner", "admin", "administrator"]):
+                        is_group_admin = True
+            except Exception:
+                pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can use this command!")
+            return
+        
+        # Parse command: /setjoinwait 3
+        text = message.text or ""
+        parts = text.split()
+        
+        if len(parts) < 2:
+            await message.reply(
+                "❌ **Usage:**\n"
+                "`/setjoinwait <number>`\n\n"
+                "**Example:**\n"
+                "`/setjoinwait 3` - New users must wait for 3 more members to join before they can message\n\n"
+                "Use `/removejoinwait` to disable this feature."
+            )
+            return
+        
+        try:
+            required_joins = int(parts[1])
+            if required_joins < 1 or required_joins > 100:
+                await message.reply("❌ Number must be between 1 and 100!")
+                return
+        except ValueError:
+            await message.reply("❌ Please provide a valid number!")
+            return
+        
+        # Save config
+        new_member_wait_config[chat_id] = {
+            "enabled": True,
+            "required_joins": required_joins,
+            "join_count": 0
+        }
+        save_new_member_wait(chat_id)
+        
+        await message.reply(
+            f"✅ **Join Wait Enabled!**\n\n"
+            f"📊 Required Joins: **{required_joins}**\n\n"
+            f"⚠️ New users will be restricted from messaging until {required_joins} more members join the group.\n\n"
+            f"Use `/removejoinwait` to disable.\n"
+            f"Use `/joinwaitstatus` to check current status."
+        )
+    
+    @bot_client.on_message(filters.command("removejoinwait") & GROUP_CHAT)
+    async def removejoinwait_handler(client, message):
+        """Remove join wait restriction"""
+        global new_member_wait_config
+        
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+        
+        # Check if admin
+        is_bot_admin = bool(user_id and user_id in ADMIN_IDS)
+        is_group_admin = False
+        
+        if message.sender_chat and message.sender_chat.id == chat_id:
+            is_group_admin = True
+        elif user_id:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                cls_name = member.__class__.__name__ if member else ""
+                if "Owner" in cls_name or "Administrator" in cls_name or "Admin" in cls_name:
+                    is_group_admin = True
+                elif hasattr(member, "status"):
+                    status = member.status
+                    status_str = str(status.value if hasattr(status, "value") else status).lower()
+                    if any(x in status_str for x in ["creator", "owner", "admin", "administrator"]):
+                        is_group_admin = True
+            except Exception:
+                pass
+        
+        if not is_bot_admin and not is_group_admin:
+            await message.reply("❌ Only admins can use this command!")
+            return
+        
+        # Disable
+        if chat_id in new_member_wait_config:
+            new_member_wait_config[chat_id]["enabled"] = False
+            save_new_member_wait(chat_id)
+        
+        # Unrestrict all pending users
+        unrestrict_all_users(chat_id)
+        
+        if new_member_wait_col is not None:
+            new_member_wait_col.delete_one({"chat_id": chat_id})
+        
+        await message.reply("🔴 **Join Wait Disabled!**\n\nAll users can now send messages freely.")
+    
+    @bot_client.on_message(filters.command("joinwaitstatus") & GROUP_CHAT)
+    async def joinwaitstatus_handler(client, message):
+        """Show join wait status"""
+        chat_id = message.chat.id
+        
+        if chat_id not in new_member_wait_config:
+            new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
+        
+        config = new_member_wait_config.get(chat_id, {})
+        
+        if config.get("enabled"):
+            required = config.get("required_joins", 3)
+            current = config.get("join_count", 0)
+            remaining = max(0, required - current)
+            restricted_count = get_restricted_user_count(chat_id)
+            
+            await message.reply(
+                f"⏳ **Join Wait Status**\n\n"
+                f"**Status:** 🟢 Enabled\n"
+                f"📊 Required Joins: **{required}**\n"
+                f"👥 Members Joined: **{current}/{required}**\n"
+                f"⏰ Remaining: **{remaining}** more joins needed\n"
+                f"🔒 Restricted Users: **{restricted_count}**\n\n"
+                f"{'✅ Restriction lifted! Users can message now.' if remaining == 0 else f'⚠️ {remaining} more members need to join before restricted users can message.'}"
+            )
+        else:
+            await message.reply(
+                f"⏳ **Join Wait Status**\n\n"
+                f"**Status:** 🔴 Disabled\n\n"
+                f"Use `/setjoinwait <number>` to enable."
+            )
+    
+    # ============ NEW MEMBER JOIN HANDLER ============
+    
+    @bot_client.on_message(filters.new_chat_members)
+    async def new_member_handler(client, message):
+        """Handle new members joining - track for join wait feature"""
+        global new_member_wait_config
+        
+        chat_id = message.chat.id
+        
+        # Load config if not in memory
+        if chat_id not in new_member_wait_config:
+            new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
+        
+        config = new_member_wait_config.get(chat_id, {})
+        
+        if not config.get("enabled"):
+            return
+        
+        # Count new members
+        new_members_count = len(message.new_chat_members) if message.new_chat_members else 0
+        
+        if new_members_count == 0:
+            return
+        
+        # Add each new user to restricted list
+        for new_member in message.new_chat_members:
+            if new_member.is_bot:
+                continue
+            add_restricted_user(chat_id, new_member.id)
+        
+        # Increment join count
+        current_count = config.get("join_count", 0) + new_members_count
+        required = config.get("required_joins", 3)
+        
+        new_member_wait_config[chat_id]["join_count"] = current_count
+        save_new_member_wait(chat_id)
+        
+        # Check if requirement met
+        if current_count >= required:
+            # Unrestrict all users
+            unrestrict_all_users(chat_id)
+            
+            # Reset counter for next cycle
+            new_member_wait_config[chat_id]["join_count"] = 0
+            save_new_member_wait(chat_id)
+            
+            try:
+                notify_msg = await client.send_message(
+                    chat_id,
+                    f"✅ **{required} members joined!**\n\n"
+                    f"All restricted users can now send messages! 🎉"
+                )
+                asyncio.create_task(auto_delete_message(notify_msg, 15))
+            except Exception as e:
+                print(f"Failed to send notification: {e}")
+    
+    # ============ NEW MEMBER MESSAGE FILTER ============
+    
+    @bot_client.on_message(GROUP_CHAT & ~filters.command(["setjoinwait", "removejoinwait", "joinwaitstatus", "setforcejoin", "removeforcejoin", "forcejoininfo", "enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=0)
+    async def new_member_wait_filter(client, message):
+        """Block messages from new restricted users until join count is met"""
+        global new_member_wait_config
+        
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+        
+        if not user_id:
+            return
+        
+        # Skip if sender_chat (anonymous admin)
+        if getattr(message, "sender_chat", None) is not None:
+            return
+        
+        # Load config if not in memory
+        if chat_id not in new_member_wait_config:
+            new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
+        
+        config = new_member_wait_config.get(chat_id, {})
+        
+        # Skip if feature is disabled
+        if not config.get("enabled"):
+            return
+        
+        # Skip if user is admin
+        try:
+            member = await client.get_chat_member(chat_id, user_id)
+            cls_name = member.__class__.__name__ if member else ""
+            if "Owner" in cls_name or "Administrator" in cls_name or "Admin" in cls_name:
+                return
+            if hasattr(member, "privileges") and member.privileges is not None:
+                return
+            if hasattr(member, "status"):
+                status = member.status
+                status_str = str(status.value if hasattr(status, "value") else status).lower()
+                if any(x in status_str for x in ["creator", "owner", "admin", "administrator"]):
+                    return
+        except Exception:
+            pass
+        
+        # Skip if user is bot admin
+        if user_id in ADMIN_IDS:
+            return
+        
+        # Check if user is restricted
+        if not is_user_restricted(chat_id, user_id):
+            return
+        
+        # User is restricted - delete message and notify
+        try:
+            await message.delete()
+            
+            required = config.get("required_joins", 3)
+            current = config.get("join_count", 0)
+            remaining = max(0, required - current)
+            
+            user_name = message.from_user.first_name
+            
+            notify_msg = await client.send_message(
+                chat_id,
+                f"⏳ **Wait!** {user_name}\n\n"
+                f"You cannot send messages yet.\n"
+                f"**{remaining}** more members need to join before you can message.\n\n"
+                f"👥 Progress: {current}/{required} members joined"
+            )
+            asyncio.create_task(auto_delete_message(notify_msg, 10))
+        except Exception as e:
+            print(f"Failed to handle restricted user message: {e}")
     
     @bot_client.on_message(filters.command("setforcejoin") & GROUP_CHAT)
     async def setforcejoin_handler(client, message):
