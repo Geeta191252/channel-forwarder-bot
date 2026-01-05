@@ -3870,6 +3870,57 @@ def register_bot_handlers():
         except Exception as e:
             print(f"Failed to handle restricted user message: {e}")
     
+    # ============ @ADMIN TAG COMMAND ============
+    
+    @bot_client.on_message(filters.regex(r"@admin") & GROUP_CHAT)
+    async def admin_tag_handler(client, message):
+        """Handle @admin tag - notify all group admins"""
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+        user_name = message.from_user.first_name if message.from_user else "Someone"
+        
+        try:
+            # Get all admins of the group
+            admins = []
+            async for member in client.get_chat_members(chat_id, filter=pyrogram.enums.ChatMembersFilter.ADMINISTRATORS):
+                if member.user and not member.user.is_bot:
+                    admins.append(member.user)
+            
+            if not admins:
+                await message.reply("❌ No admins found in this group!")
+                return
+            
+            # Build admin mentions
+            admin_mentions = []
+            for admin in admins:
+                mention = f"[{admin.first_name}](tg://user?id={admin.id})"
+                admin_mentions.append(mention)
+            
+            admin_list = " | ".join(admin_mentions)
+            
+            # Get reply context if any
+            reply_text = ""
+            if message.reply_to_message:
+                reply_text = "\n\n📝 **Regarding message:** " + (message.reply_to_message.text or message.reply_to_message.caption or "[Media]")[:100]
+            
+            # Get user's message (remove @admin from it)
+            user_msg = message.text or ""
+            user_msg = user_msg.replace("@admin", "").strip()
+            reason = f"\n\n💬 **Reason:** {user_msg}" if user_msg else ""
+            
+            await message.reply(
+                f"🚨 **Admin Alert!**\n\n"
+                f"👤 **Called by:** [{user_name}](tg://user?id={user_id})\n"
+                f"👮 **Admins:** {admin_list}"
+                f"{reason}"
+                f"{reply_text}",
+                disable_web_page_preview=True
+            )
+            
+        except Exception as e:
+            print(f"Error in @admin handler: {e}")
+            await message.reply("❌ Failed to notify admins. Make sure the bot is admin!")
+    
     @bot_client.on_message(filters.command("setforcejoin") & GROUP_CHAT)
     async def setforcejoin_handler(client, message):
         """Set force join channel for this group"""
