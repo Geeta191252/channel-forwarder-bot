@@ -2442,6 +2442,7 @@ def register_bot_handlers():
                 "`/modstatus` - View all settings\n\n"
                 "⚡ Force Join: Non-members के messages delete होंगे!\n"
                 "👥 Join Wait: New user को X members add करने होंगे!\n"
+                "🧩 Build: joinwait-v1\n"
                 "👮 Admins are exempt from filters.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
