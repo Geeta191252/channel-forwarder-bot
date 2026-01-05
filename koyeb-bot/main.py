@@ -3912,52 +3912,61 @@ def register_bot_handlers():
         if current >= required:
             return
         
-        # User hasn't added enough members yet - INSTANT delete message and notify
+        # User hasn't added enough members yet - delete as fast as possible
         try:
-            # Delete message IMMEDIATELY (no delay)
-            asyncio.create_task(message.delete())
-            
-            remaining = max(0, required - current)
-            user_name = message.from_user.first_name
-            user_mention = f"[{user_name}](tg://user?id={user_id})"
-            
-            # Get group invite link for Add Member button
+            # FAST PATH: delete first, before any other API calls
+            await message.delete()
+        except Exception as e:
+            # If we can't delete (missing perms), don't block processing
+            print(f"JoinWait delete failed: {e}")
+
+        async def _notify_joinwait():
             try:
-                chat_info = await client.get_chat(chat_id)
-                invite_link = chat_info.invite_link
-                if not invite_link:
-                    # Try to create invite link
-                    invite_link = (await client.create_chat_invite_link(chat_id)).invite_link
-            except Exception:
-                invite_link = None
-            
-            # Build inline buttons
-            buttons = []
-            if invite_link:
+                remaining = max(0, required - current)
+                user_name = message.from_user.first_name
+                user_mention = f"[{user_name}](tg://user?id={user_id})"
+
+                # Get group invite link for Add Member button
+                try:
+                    chat_info = await client.get_chat(chat_id)
+                    invite_link = chat_info.invite_link
+                    if not invite_link:
+                        invite_link = (await client.create_chat_invite_link(chat_id)).invite_link
+                except Exception:
+                    invite_link = None
+
+                # Build inline buttons
+                buttons = []
+                if invite_link:
+                    buttons.append([
+                        InlineKeyboardButton(
+                            "👥 Add Member",
+                            url=f"https://t.me/share/url?url={invite_link}&text=Join%20our%20group!",
+                        )
+                    ])
                 buttons.append([
                     InlineKeyboardButton(
-                        "👥 Add Member",
-                        url=f"https://t.me/share/url?url={invite_link}&text=Join%20our%20group!"
+                        "📊 How many users have I added?",
+                        callback_data=f"joinwait_check_{chat_id}_{user_id}",
                     )
                 ])
-            buttons.append([
-                InlineKeyboardButton(
-                    "📊 How many users have I added?",
-                    callback_data=f"joinwait_check_{chat_id}_{user_id}"
+
+                notify_msg = await client.send_message(
+                    chat_id,
+                    f"⬜ **Add member**\n"
+                    f"👈 Dear {user_mention}\n"
+                    f"user, you need to add **{required}** of your contacts to the group then you can send message!\n\n"
+                    f"👥 Your Progress: **{current}/{required}**\n"
+                    f"⏰ Remaining: **{remaining}**",
+                    reply_markup=InlineKeyboardMarkup(buttons),
                 )
-            ])
-            
-            notify_msg = await client.send_message(
-                chat_id,
-                f"⬜ **Add member**\n"
-                f"👈 Dear {user_mention}\n"
-                f"user, you need to add **{required}** of your contacts to the group then you can send message!\n\n"
-                f"👥 Your Progress: **{current}/{required}**",
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
-            asyncio.create_task(auto_delete_message(notify_msg, 15))
-        except Exception as e:
-            print(f"Failed to handle joinwait message: {e}")
+                asyncio.create_task(auto_delete_message(notify_msg, 15))
+            except Exception as e:
+                print(f"Failed to send joinwait notify: {e}")
+
+        # Run notification in background so next deletes stay instant
+        asyncio.create_task(_notify_joinwait())
+        return
     
     # ============ JOINWAIT CALLBACK HANDLER ============
     
