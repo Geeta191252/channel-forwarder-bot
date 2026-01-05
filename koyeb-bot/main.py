@@ -78,6 +78,10 @@ group_forcejoin_config = {}
 # Join-wait config: {chat_id: {"enabled": True, "required_adds": 3}}
 new_member_wait_config = {}
 
+# Cached group admins to avoid per-message API calls (speeds up instant delete)
+GROUP_ADMIN_CACHE = {}  # {chat_id: {"ts": float, "ids": set[int]}}
+GROUP_ADMIN_CACHE_TTL = int(os.getenv("GROUP_ADMIN_CACHE_TTL", "45"))  # seconds
+
 # Public access control
 public_access_enabled = False  # Default: only admins can use bot
 
@@ -3854,7 +3858,34 @@ def register_bot_handlers():
         increment_user_added_count(chat_id, inviter_id, credited)
     
     # ============ NEW MEMBER MESSAGE FILTER ============
-    
+
+    async def is_group_admin_cached(client, chat_id: int, user_id: int) -> bool:
+        """Fast admin check using a short TTL cache (avoids get_chat_member per message)."""
+        now = time.monotonic()
+        entry = GROUP_ADMIN_CACHE.get(chat_id)
+        if entry and (now - entry["ts"]) < GROUP_ADMIN_CACHE_TTL:
+            return user_id in entry["ids"]
+
+        admin_ids: set[int] = set()
+        try:
+            async for m in client.get_chat_members(
+                chat_id,
+                filter=pyrogram.enums.ChatMembersFilter.ADMINISTRATORS,
+            ):
+                if m and getattr(m, "user", None):
+                    admin_ids.add(m.user.id)
+        except Exception:
+            # Fallback: check only this user (slower, but rare)
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                status_str = str(getattr(member, "status", "")).lower()
+                return any(x in status_str for x in ["creator", "administrator", "admin", "owner"])
+            except Exception:
+                return False
+
+        GROUP_ADMIN_CACHE[chat_id] = {"ts": now, "ids": admin_ids}
+        return user_id in admin_ids
+
     @bot_client.on_message(
         GROUP_CHAT
         & ~filters.regex(
@@ -3865,43 +3896,33 @@ def register_bot_handlers():
     async def new_member_wait_filter(client, message):
         """Block messages from ALL users until join count is met - instant delete"""
         global new_member_wait_config
-        
+
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else None
-        
+
         if not user_id:
             return
-        
+
         # Skip if sender_chat (anonymous admin)
         if getattr(message, "sender_chat", None) is not None:
             return
-        
+
         # Load config if not in memory
         if chat_id not in new_member_wait_config:
             new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
-        
+
         config = new_member_wait_config.get(chat_id, {})
-        
+
         # Skip if feature is disabled
         if not config.get("enabled"):
             return
-        
-        # Skip if user is admin
+
+        # Skip if user is admin (cached for speed)
         try:
-            member = await client.get_chat_member(chat_id, user_id)
-            cls_name = member.__class__.__name__ if member else ""
-            if "Owner" in cls_name or "Administrator" in cls_name or "Admin" in cls_name:
+            if await is_group_admin_cached(client, chat_id, user_id):
                 return
-            if hasattr(member, "privileges") and member.privileges is not None:
-                return
-            if hasattr(member, "status"):
-                status = member.status
-                status_str = str(status.value if hasattr(status, "value") else status).lower()
-                if any(x in status_str for x in ["creator", "owner", "admin", "administrator"]):
-                    return
         except Exception:
             pass
-        
         # Skip if user is bot admin
         if user_id in ADMIN_IDS:
             return
