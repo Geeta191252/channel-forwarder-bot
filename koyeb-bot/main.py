@@ -1602,8 +1602,25 @@ def register_bot_handlers():
             message.stop_propagation()
             return
 
-        # For all other messages/commands, do NOT stop propagation so other handlers can process them
+        # /setjoinwait
+        if _is_cmd(text, "setjoinwait"):
+            await setjoinwait_handler(client, message)
+            message.stop_propagation()
+            return
 
+        # /removejoinwait
+        if _is_cmd(text, "removejoinwait"):
+            await removejoinwait_handler(client, message)
+            message.stop_propagation()
+            return
+
+        # /joinwaitstatus
+        if _is_cmd(text, "joinwaitstatus"):
+            await joinwaitstatus_handler(client, message)
+            message.stop_propagation()
+            return
+
+        # For all other messages/commands, do NOT stop propagation so other handlers can process them
 
     @bot_client.on_message(filters.command(["myid", "checkadmin"]))
     async def myid_handler(client, message):
