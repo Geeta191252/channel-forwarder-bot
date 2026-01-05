@@ -2429,6 +2429,10 @@ def register_bot_handlers():
                 "`/setforcejoin @channel|Name|Link` - Enable\n"
                 "`/removeforcejoin` - Disable force join\n"
                 "`/forcejoininfo` - View status\n\n"
+                "**👥 Join Wait (New!):**\n"
+                "`/setjoinwait <number>` - Members add करने पर ही message\n"
+                "`/removejoinwait` - Disable join wait\n"
+                "`/joinwaitstatus` - View status\n\n"
                 "**Block @Mentions:**\n"
                 "`/blockmention` - Toggle @mention blocking\n\n"
                 "**Auto-Delete 2 min:**\n"
@@ -2437,6 +2441,7 @@ def register_bot_handlers():
                 "`/enablemod` - Enable moderation first\n"
                 "`/modstatus` - View all settings\n\n"
                 "⚡ Force Join: Non-members के messages delete होंगे!\n"
+                "👥 Join Wait: New user को X members add करने होंगे!\n"
                 "👮 Admins are exempt from filters.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
