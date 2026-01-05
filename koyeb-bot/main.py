@@ -20,12 +20,13 @@ except Exception:
 # Backward/forward compatibility: some builds may reference filters.supergroup
 if not hasattr(filters, "supergroup"):
     filters.supergroup = filters.group
+
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatType, ChatMemberStatus
 from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate, MessageNotModified
 
-# Chat type helper - filters.group covers both groups and supergroups in Pyrogram 2.x
-GROUP_CHAT = filters.group
+# Chat type helper: match both GROUP and SUPERGROUP reliably
+GROUP_CHAT = filters.group | filters.supergroup
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
