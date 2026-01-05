@@ -3891,7 +3891,8 @@ def register_bot_handlers():
         & ~filters.regex(
             r"^/(setjoinwait|removejoinwait|joinwaitstatus|setforcejoin|removeforcejoin|forcejoininfo|enablemod|disablemod|blockforward|blocklinks|blockbadwords|blockmention|autodelete2min|modstatus|warnings|resetwarnings)(?:@[A-Za-z0-9_]+)?(?:\s|$)"
         ),
-        group=-10,
+        # Run as early as possible so the user's message disappears instantly.
+        group=-999,
     )
     async def new_member_wait_filter(client, message):
         """Block messages from ALL users until join count is met - instant delete"""
