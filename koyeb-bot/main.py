@@ -3646,7 +3646,7 @@ def register_bot_handlers():
             return None
 
 
-    @bot_client.on_message(filters.command("setjoinwait") & GROUP_CHAT)
+    @bot_client.on_message(filters.regex(r"^/setjoinwait(?:@[A-Za-z0-9_]+)?(?:\\s|$)") & GROUP_CHAT)
     async def setjoinwait_handler(client, message):
         """Set how many members must join before new users can message"""
         global new_member_wait_config
@@ -3721,7 +3721,7 @@ def register_bot_handlers():
             f"Use `/joinwaitstatus` to check status.",
         )
     
-    @bot_client.on_message(filters.command("removejoinwait") & GROUP_CHAT)
+    @bot_client.on_message(filters.regex(r"^/removejoinwait(?:@[A-Za-z0-9_]+)?(?:\\s|$)") & GROUP_CHAT)
     async def removejoinwait_handler(client, message):
         """Remove join wait restriction"""
         global new_member_wait_config
@@ -3765,7 +3765,7 @@ def register_bot_handlers():
         
         await _safe_group_reply(client, message, "🔴 **Join Wait Disabled!**\n\nAll users can now send messages freely.")
     
-    @bot_client.on_message(filters.command("joinwaitstatus") & GROUP_CHAT)
+    @bot_client.on_message(filters.regex(r"^/joinwaitstatus(?:@[A-Za-z0-9_]+)?(?:\\s|$)") & GROUP_CHAT)
     async def joinwaitstatus_handler(client, message):
         """Show join wait status"""
         chat_id = message.chat.id
@@ -3838,7 +3838,13 @@ def register_bot_handlers():
     
     # ============ NEW MEMBER MESSAGE FILTER ============
     
-    @bot_client.on_message(GROUP_CHAT & ~filters.command(["setjoinwait", "removejoinwait", "joinwaitstatus", "setforcejoin", "removeforcejoin", "forcejoininfo", "enablemod", "disablemod", "blockforward", "blocklinks", "blockbadwords", "blockmention", "autodelete2min", "modstatus", "warnings", "resetwarnings"]), group=0)
+    @bot_client.on_message(
+        GROUP_CHAT
+        & ~filters.regex(
+            r"^/(setjoinwait|removejoinwait|joinwaitstatus|setforcejoin|removeforcejoin|forcejoininfo|enablemod|disablemod|blockforward|blocklinks|blockbadwords|blockmention|autodelete2min|modstatus|warnings|resetwarnings)(?:@[A-Za-z0-9_]+)?(?:\\s|$)"
+        ),
+        group=0,
+    )
     async def new_member_wait_filter(client, message):
         """Block messages from new restricted users until join count is met"""
         global new_member_wait_config
