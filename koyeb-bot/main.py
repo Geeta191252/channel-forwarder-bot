@@ -23,7 +23,15 @@ if not hasattr(filters, "supergroup"):
 
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatType, ChatMemberStatus
-from pyrogram.errors import FloodWait, SlowmodeWait, ChatAdminRequired, ChannelPrivate, MessageNotModified
+from pyrogram.errors import (
+    FloodWait,
+    SlowmodeWait,
+    ChatAdminRequired,
+    ChannelPrivate,
+    MessageNotModified,
+    ChatWriteForbidden,
+    Forbidden,
+)
 
 # Chat type helper: match both GROUP and SUPERGROUP reliably
 GROUP_CHAT = filters.group | filters.supergroup
@@ -3616,9 +3624,28 @@ def register_bot_handlers():
         except Exception:
             pass
         return False
-    
+
     # ============ NEW MEMBER WAIT COMMANDS ============
-    
+
+    async def _safe_group_reply(client, message, text: str):
+        """Reply in group; if bot can't write in group, try DM the user with instructions."""
+        try:
+            return await message.reply(text)
+        except (ChatWriteForbidden, Forbidden) as e:
+            print(f"⚠️ JoinWait reply failed in chat {message.chat.id}: {e}")
+            if message.from_user:
+                try:
+                    await client.send_message(
+                        message.from_user.id,
+                        "⚠️ Bot group me reply nahi kar pa raha (send permission/mute issue).\n"
+                        "Please bot ko group me **Send Messages** permission do ya **Admin** banao, phir command dobara run karo.\n\n"
+                        f"Group: {message.chat.title or message.chat.id}\n\n" + text,
+                    )
+                except Exception as e2:
+                    print(f"⚠️ DM also failed for JoinWait: {e2}")
+            return None
+
+
     @bot_client.on_message(filters.command("setjoinwait") & GROUP_CHAT)
     async def setjoinwait_handler(client, message):
         """Set how many members must join before new users can message"""
@@ -3648,7 +3675,7 @@ def register_bot_handlers():
                 pass
         
         if not is_bot_admin and not is_group_admin:
-            await message.reply("❌ Only admins can use this command!")
+            await _safe_group_reply(client, message, "❌ Only admins can use this command!")
             return
         
         # Parse command: /setjoinwait 3
@@ -3656,22 +3683,24 @@ def register_bot_handlers():
         parts = text.split()
         
         if len(parts) < 2:
-            await message.reply(
+            await _safe_group_reply(
+                client,
+                message,
                 "❌ **Usage:**\n"
                 "`/setjoinwait <number>`\n\n"
                 "**Example:**\n"
-                "`/setjoinwait 3` - New users must wait for 3 more members to join before they can message\n\n"
-                "Use `/removejoinwait` to disable this feature."
+                "`/setjoinwait 3` - Har user ko 3 members add karne honge tabhi message bhej sakta hai\n\n"
+                "Use `/removejoinwait` to disable this feature.",
             )
             return
         
         try:
             required_joins = int(parts[1])
             if required_joins < 1 or required_joins > 100:
-                await message.reply("❌ Number must be between 1 and 100!")
+                await _safe_group_reply(client, message, "❌ Number must be between 1 and 100!")
                 return
         except ValueError:
-            await message.reply("❌ Please provide a valid number!")
+            await _safe_group_reply(client, message, "❌ Please provide a valid number!")
             return
         
         # Save config
@@ -3682,12 +3711,14 @@ def register_bot_handlers():
         save_new_member_wait(chat_id)
         reset_joinwait_chat_counts(chat_id)
         
-        await message.reply(
+        await _safe_group_reply(
+            client,
+            message,
             f"✅ **Join Wait Enabled!**\n\n"
             f"📊 Required Adds (per user): **{required_joins}**\n\n"
             f"⚠️ Ab se **har user** ko group me **{required_joins} members add** karne honge, tabhi woh message bhej sakta hai.\n\n"
             f"Use `/removejoinwait` to disable.\n"
-            f"Use `/joinwaitstatus` to check status."
+            f"Use `/joinwaitstatus` to check status.",
         )
     
     @bot_client.on_message(filters.command("removejoinwait") & GROUP_CHAT)
@@ -3719,7 +3750,7 @@ def register_bot_handlers():
                 pass
         
         if not is_bot_admin and not is_group_admin:
-            await message.reply("❌ Only admins can use this command!")
+            await _safe_group_reply(client, message, "❌ Only admins can use this command!")
             return
         
         # Disable
@@ -3732,7 +3763,7 @@ def register_bot_handlers():
         if new_member_wait_col is not None:
             new_member_wait_col.delete_one({"chat_id": chat_id})
         
-        await message.reply("🔴 **Join Wait Disabled!**\n\nAll users can now send messages freely.")
+        await _safe_group_reply(client, message, "🔴 **Join Wait Disabled!**\n\nAll users can now send messages freely.")
     
     @bot_client.on_message(filters.command("joinwaitstatus") & GROUP_CHAT)
     async def joinwaitstatus_handler(client, message):
@@ -3750,19 +3781,23 @@ def register_bot_handlers():
             mine = get_user_added_count(chat_id, user_id) if user_id else 0
             remaining = max(0, required - mine)
             
-            await message.reply(
+            await _safe_group_reply(
+                client,
+                message,
                 f"⏳ **Join Wait Status**\n\n"
                 f"**Status:** 🟢 Enabled\n"
                 f"📊 Required Adds (per user): **{required}**\n"
                 f"👤 Your Adds: **{mine}/{required}**\n"
                 f"⏰ Remaining: **{remaining}**\n\n"
-                + ("✅ Ab aap message bhej sakte ho." if remaining == 0 else f"⚠️ Pehle {remaining} members add karo, tabhi message bhej paoge.")
+                + ("✅ Ab aap message bhej sakte ho." if remaining == 0 else f"⚠️ Pehle {remaining} members add karo, tabhi message bhej paoge."),
             )
         else:
-            await message.reply(
+            await _safe_group_reply(
+                client,
+                message,
                 "⏳ **Join Wait Status**\n\n"
                 "**Status:** 🔴 Disabled\n\n"
-                "Use `/setjoinwait <number>` to enable."
+                "Use `/setjoinwait <number>` to enable.",
             )
     
     # ============ NEW MEMBER JOIN HANDLER ============
