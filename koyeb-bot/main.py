@@ -3863,7 +3863,7 @@ def register_bot_handlers():
         group=0,
     )
     async def new_member_wait_filter(client, message):
-        """Block messages from new restricted users until join count is met"""
+        """Block messages from ALL users until join count is met - instant delete"""
         global new_member_wait_config
         
         chat_id = message.chat.id
@@ -3912,21 +3912,94 @@ def register_bot_handlers():
         if current >= required:
             return
         
-        # User hasn't added enough members yet - delete message and notify
+        # User hasn't added enough members yet - INSTANT delete message and notify
         try:
-            await message.delete()
+            # Delete message IMMEDIATELY (no delay)
+            asyncio.create_task(message.delete())
+            
             remaining = max(0, required - current)
             user_name = message.from_user.first_name
+            user_mention = f"[{user_name}](tg://user?id={user_id})"
+            
+            # Get group invite link for Add Member button
+            try:
+                chat_info = await client.get_chat(chat_id)
+                invite_link = chat_info.invite_link
+                if not invite_link:
+                    # Try to create invite link
+                    invite_link = (await client.create_chat_invite_link(chat_id)).invite_link
+            except Exception:
+                invite_link = None
+            
+            # Build inline buttons
+            buttons = []
+            if invite_link:
+                buttons.append([
+                    InlineKeyboardButton(
+                        "👥 Add Member",
+                        url=f"https://t.me/share/url?url={invite_link}&text=Join%20our%20group!"
+                    )
+                ])
+            buttons.append([
+                InlineKeyboardButton(
+                    "📊 How many users have I added?",
+                    callback_data=f"joinwait_check_{chat_id}_{user_id}"
+                )
+            ])
             
             notify_msg = await client.send_message(
                 chat_id,
-                f"⏳ **Wait!** {user_name}\n\n"
-                f"Pehle **{remaining}** members add karo, tabhi message bhej paoge.\n\n"
-                f"👥 Your Progress: {current}/{required}"
+                f"⬜ **Add member**\n"
+                f"👈 Dear {user_mention}\n"
+                f"user, you need to add **{required}** of your contacts to the group then you can send message!\n\n"
+                f"👥 Your Progress: **{current}/{required}**",
+                reply_markup=InlineKeyboardMarkup(buttons)
             )
-            asyncio.create_task(auto_delete_message(notify_msg, 10))
+            asyncio.create_task(auto_delete_message(notify_msg, 15))
         except Exception as e:
             print(f"Failed to handle joinwait message: {e}")
+    
+    # ============ JOINWAIT CALLBACK HANDLER ============
+    
+    @bot_client.on_callback_query(filters.regex(r"^joinwait_check_"))
+    async def joinwait_check_callback(client, callback_query):
+        """Handle 'How many users have I added?' button click"""
+        try:
+            data = callback_query.data
+            parts = data.split("_")
+            # joinwait_check_{chat_id}_{user_id}
+            if len(parts) < 4:
+                await callback_query.answer("❌ Invalid request", show_alert=True)
+                return
+            
+            chat_id = int(parts[2])
+            original_user_id = int(parts[3])
+            clicker_id = callback_query.from_user.id
+            
+            # Load config
+            if chat_id not in new_member_wait_config:
+                new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
+            
+            config = new_member_wait_config.get(chat_id, {})
+            required = int(config.get("required_adds", 3))
+            
+            # Get clicker's own count
+            clicker_count = get_user_added_count(chat_id, clicker_id)
+            remaining = max(0, required - clicker_count)
+            
+            if remaining == 0:
+                await callback_query.answer(
+                    f"✅ You have added {clicker_count} users!\nYou can now send messages.",
+                    show_alert=True
+                )
+            else:
+                await callback_query.answer(
+                    f"You have added {clicker_count} users so far and you need to add {remaining} more users",
+                    show_alert=True
+                )
+        except Exception as e:
+            print(f"Error in joinwait_check_callback: {e}")
+            await callback_query.answer("❌ Error checking status", show_alert=True)
     
     # ============ @ADMIN TAG COMMAND ============
     
