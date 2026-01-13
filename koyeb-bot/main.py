@@ -1356,11 +1356,165 @@ def register_bot_handlers():
             message.stop_propagation()
             return
 
-        # ===== GROUP-ONLY MODERATION COMMANDS =====
-        
+        # ===== PRIVATE-ONLY BROADCAST COMMANDS =====
+
         if not is_group:
-            # Let other handlers process private chat messages
+            # Track user for broadcasts (best-effort)
+            try:
+                if broadcast_users_col is not None and message.from_user is not None:
+                    broadcast_users_col.update_one(
+                        {"user_id": message.from_user.id},
+                        {"$set": {
+                            "user_id": message.from_user.id,
+                            "username": getattr(message.from_user, "username", None),
+                            "first_name": getattr(message.from_user, "first_name", None),
+                            "updated_at": datetime.utcnow(),
+                        }},
+                        upsert=True,
+                    )
+            except Exception:
+                pass
+
+            # /broadcaststats
+            if _is_cmd(text, "broadcaststats"):
+                if message.from_user is None or message.from_user.id not in ADMIN_IDS:
+                    await message.reply("❌ Only admins can view broadcast stats.")
+                    message.stop_propagation()
+                    return
+
+                user_count = broadcast_users_col.count_documents({}) if broadcast_users_col is not None else 0
+                group_count = broadcast_groups_col.count_documents({}) if broadcast_groups_col is not None else 0
+
+                await message.reply(
+                    f"📊 **Broadcast Statistics**\n\n"
+                    f"👤 Total Users: {user_count}\n"
+                    f"👥 Total Groups: {group_count}\n\n"
+                    f"**Commands:**\n"
+                    f"Reply any message + `/broadcast` (users)\n"
+                    f"Reply any message + `/gbroadcast` (groups)\n"
+                    f"`/broadcaststats`"
+                )
+                message.stop_propagation()
+                return
+
+            # /broadcast (users)
+            if _is_cmd(text, "broadcast"):
+                if message.from_user is None or message.from_user.id not in ADMIN_IDS:
+                    await message.reply("❌ Only admins can use broadcast.")
+                    message.stop_propagation()
+                    return
+
+                if not message.reply_to_message:
+                    await message.reply(
+                        "📢 **Broadcast to Users**\n\n"
+                        "Reply to any message (text/photo/video/document) with:\n"
+                        "`/broadcast` - Send to all users"
+                    )
+                    message.stop_propagation()
+                    return
+
+                if broadcast_users_col is None:
+                    await message.reply("❌ Database not connected.")
+                    message.stop_propagation()
+                    return
+
+                status_msg = await message.reply("📢 Starting broadcast to users...")
+                users = list(broadcast_users_col.find({}))
+                total = len(users)
+                success = failed = blocked = 0
+
+                for u in users:
+                    user_id = u.get("user_id")
+                    if not user_id:
+                        continue
+                    try:
+                        await message.reply_to_message.copy(user_id)
+                        success += 1
+                        if success % 50 == 0:
+                            await status_msg.edit(f"📢 Users: ✅ {success}/{total} | ❌ {failed} | 🚫 {blocked}")
+                        await asyncio.sleep(0.05)
+                    except Exception as e:
+                        err = str(e).lower()
+                        if "blocked" in err or "deactivated" in err:
+                            blocked += 1
+                            try:
+                                broadcast_users_col.delete_one({"user_id": user_id})
+                            except Exception:
+                                pass
+                        else:
+                            failed += 1
+
+                await status_msg.edit(
+                    f"✅ **Broadcast Complete!**\n\n"
+                    f"📊 Total users: {total}\n"
+                    f"✅ Sent: {success}\n"
+                    f"❌ Failed: {failed}\n"
+                    f"🚫 Blocked (removed): {blocked}"
+                )
+                message.stop_propagation()
+                return
+
+            # /gbroadcast (groups)
+            if _is_cmd(text, "gbroadcast"):
+                if message.from_user is None or message.from_user.id not in ADMIN_IDS:
+                    await message.reply("❌ Only admins can use group broadcast.")
+                    message.stop_propagation()
+                    return
+
+                if not message.reply_to_message:
+                    await message.reply(
+                        "📢 **Broadcast to Groups**\n\n"
+                        "Reply to any message (text/photo/video/document) with:\n"
+                        "`/gbroadcast` - Send to all groups where bot is admin"
+                    )
+                    message.stop_propagation()
+                    return
+
+                if broadcast_groups_col is None:
+                    await message.reply("❌ Database not connected.")
+                    message.stop_propagation()
+                    return
+
+                status_msg = await message.reply("📢 Starting broadcast to groups...")
+                groups = list(broadcast_groups_col.find({}))
+                total = len(groups)
+                success = failed = removed = 0
+
+                for g in groups:
+                    chat_id2 = g.get("chat_id")
+                    if not chat_id2:
+                        continue
+                    try:
+                        await message.reply_to_message.copy(chat_id2)
+                        success += 1
+                        if success % 20 == 0:
+                            await status_msg.edit(f"📢 Groups: ✅ {success}/{total} | ❌ {failed} | 🗑️ {removed}")
+                        await asyncio.sleep(0.1)
+                    except Exception as e:
+                        err = str(e).lower()
+                        if "forbidden" in err or "not a member" in err or "chat not found" in err or "kicked" in err:
+                            removed += 1
+                            try:
+                                broadcast_groups_col.delete_one({"chat_id": chat_id2})
+                            except Exception:
+                                pass
+                        else:
+                            failed += 1
+
+                await status_msg.edit(
+                    f"✅ **Group Broadcast Complete!**\n\n"
+                    f"📊 Total groups: {total}\n"
+                    f"✅ Sent: {success}\n"
+                    f"❌ Failed: {failed}\n"
+                    f"🗑️ Removed (left/kicked): {removed}"
+                )
+                message.stop_propagation()
+                return
+
+            # Not a command we handle in private here
             return
+
+        # ===== GROUP-ONLY MODERATION COMMANDS =====
         
         # /enablemod
         if _is_cmd(text, "enablemod"):
