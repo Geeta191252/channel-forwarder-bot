@@ -462,18 +462,43 @@ async def refresh_admin_groups(client):
     saved_groups = get_all_admin_groups()
     admin_count = 0
     removed_count = 0
+    checked_count = 0
+    
+    print(f"🔍 Found {len(saved_groups)} saved groups to verify", flush=True)
     
     for group in saved_groups:
         chat_id = group.get("chat_id")
         if not chat_id:
             continue
         
+        checked_count += 1
+        print(f"🔄 Checking chat: {chat_id} - {group.get('chat_title', 'Unknown')}", flush=True)
+        
         try:
             chat_id_int = int(chat_id)
-            chat = await client.get_chat(chat_id_int)
-            me = await client.get_chat_member(chat_id_int, "me")
             
-            if me.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+            # Get chat info
+            try:
+                chat = await client.get_chat(chat_id_int)
+                print(f"✅ Got chat info: {chat.title}", flush=True)
+            except Exception as e:
+                print(f"❌ Failed to get chat {chat_id}: {type(e).__name__}: {e}", flush=True)
+                await remove_admin_group(chat_id_int)
+                removed_count += 1
+                continue
+            
+            # Get bot member status
+            try:
+                me = await client.get_chat_member(chat_id_int, "me")
+                print(f"📍 Bot status in {chat.title}: {me.status}", flush=True)
+            except Exception as e:
+                print(f"❌ Failed to get member status for {chat_id}: {type(e).__name__}: {e}", flush=True)
+                await remove_admin_group(chat_id_int)
+                removed_count += 1
+                continue
+            
+            admin_statuses = [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+            if me.status in admin_statuses:
                 # Update info
                 permissions = {}
                 if hasattr(me, "privileges") and me.privileges:
@@ -493,10 +518,25 @@ async def refresh_admin_groups(client):
                 # Get invite link for private chats
                 invite_link = None
                 if not username:
-                    try:
-                        invite_link = await client.export_chat_invite_link(chat_id_int)
-                    except Exception as e:
-                        print(f"⚠️ Could not get invite link for {chat.title}: {e}", flush=True)
+                    # First try to get existing invite link from chat info
+                    invite_link = getattr(chat, "invite_link", None)
+                    print(f"📎 Existing invite_link from chat: {invite_link}", flush=True)
+                    
+                    # If no existing link, try to create one
+                    if not invite_link:
+                        try:
+                            invite_link = await client.export_chat_invite_link(chat_id_int)
+                            print(f"📎 Generated invite_link: {invite_link}", flush=True)
+                        except Exception as e:
+                            print(f"⚠️ Could not generate invite link for {chat.title}: {type(e).__name__}: {e}", flush=True)
+                            # Fallback to internal link format
+                            chat_id_str = str(abs(chat_id_int))
+                            if chat_id_str.startswith("100"):
+                                chat_id_str = chat_id_str[3:]
+                            invite_link = f"https://t.me/c/{chat_id_str}"
+                            print(f"📎 Using fallback link: {invite_link}", flush=True)
+                else:
+                    print(f"📎 Public username: @{username}", flush=True)
                 
                 await save_admin_group(
                     chat_id_int,
@@ -508,29 +548,31 @@ async def refresh_admin_groups(client):
                     invite_link,
                 )
                 admin_count += 1
+                print(f"✅ Verified: {chat.title}", flush=True)
             else:
                 # No longer admin - remove
                 await remove_admin_group(chat_id_int)
                 removed_count += 1
-                print(f"➖ Removed {chat.title} - no longer admin", flush=True)
+                print(f"➖ Removed {chat.title} - no longer admin (status: {me.status})", flush=True)
                 
         except (ChannelPrivate, Forbidden) as e:
             # Bot kicked or channel made private - remove
             await remove_admin_group(int(chat_id))
             removed_count += 1
-            print(f"➖ Removed chat {chat_id} - access denied", flush=True)
+            print(f"➖ Removed chat {chat_id} - access denied: {e}", flush=True)
         except Exception as e:
-            print(f"⚠️ Error checking chat {chat_id}: {e}", flush=True)
+            print(f"⚠️ Error checking chat {chat_id}: {type(e).__name__}: {e}", flush=True)
     
-    print(f"✅ Verified {admin_count} groups/channels, removed {removed_count}", flush=True)
-    return admin_count
+    print(f"✅ Done! Verified {admin_count}, removed {removed_count}, checked {checked_count}", flush=True)
+    return {"verified": admin_count, "removed": removed_count, "checked": checked_count}
 
 
 async def auto_track_admin_group(client, chat):
     """Auto-track a group/channel when bot is added as admin."""
     try:
         me = await client.get_chat_member(chat.id, "me")
-        if me.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+        admin_statuses = [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+        if me.status in admin_statuses:
             permissions = {}
             if hasattr(me, "privileges") and me.privileges:
                 permissions = {
@@ -549,10 +591,20 @@ async def auto_track_admin_group(client, chat):
             # Get invite link for private chats
             invite_link = None
             if not username:
-                try:
-                    invite_link = await client.export_chat_invite_link(chat.id)
-                except Exception as e:
-                    print(f"⚠️ Could not get invite link for {chat.title}: {e}", flush=True)
+                # First try to get existing invite link from chat info
+                invite_link = getattr(chat, "invite_link", None)
+                
+                # If no existing link, try to create one
+                if not invite_link:
+                    try:
+                        invite_link = await client.export_chat_invite_link(chat.id)
+                    except Exception as e:
+                        print(f"⚠️ Could not generate invite link for {chat.title}: {e}", flush=True)
+                        # Fallback to internal link format
+                        chat_id_str = str(abs(chat.id))
+                        if chat_id_str.startswith("100"):
+                            chat_id_str = chat_id_str[3:]
+                        invite_link = f"https://t.me/c/{chat_id_str}"
             
             await save_admin_group(
                 chat.id,
@@ -563,7 +615,7 @@ async def auto_track_admin_group(client, chat):
                 username,
                 invite_link,
             )
-            print(f"✅ Auto-tracked admin group: {chat.title}", flush=True)
+            print(f"✅ Auto-tracked admin group: {chat.title} (link: {username or invite_link})", flush=True)
             return True
     except Exception as e:
         print(f"⚠️ Error auto-tracking {getattr(chat, 'title', chat.id)}: {e}", flush=True)
@@ -706,8 +758,20 @@ if __name__ == "__main__":
                 return
             
             msg = await message.reply_text("🔄 Refreshing admin groups/channels...")
-            count = await refresh_admin_groups(client)
-            await msg.edit_text(f"✅ Verified **{count}** groups/channels where bot is admin.\n\n💡 _Tip: Add bot to groups/channels as admin and it will auto-track them!_")
+            result = await refresh_admin_groups(client)
+            
+            verified = result.get("verified", 0)
+            removed = result.get("removed", 0)
+            checked = result.get("checked", 0)
+            
+            await msg.edit_text(
+                f"✅ **Refresh Complete!**\n\n"
+                f"📊 **Results:**\n"
+                f"• Verified: **{verified}** groups/channels\n"
+                f"• Removed: **{removed}** (no longer admin)\n"
+                f"• Total checked: **{checked}**\n\n"
+                f"💡 _Tip: Add bot to groups/channels as admin and it will auto-track them!_"
+            )
         
         # Auto-track when bot is added to a group or made admin
         @bot_client.on_chat_member_updated()
