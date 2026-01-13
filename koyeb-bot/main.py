@@ -1341,6 +1341,70 @@ def register_bot_handlers():
             print(f"Error getting admin groups: {e}")
             return []
 
+    @bot_client.on_chat_member_updated()
+    async def _auto_track_admin_groups(client, update):
+        """Auto-save group when the bot becomes admin (works without user sessions)."""
+        try:
+            if admin_groups_col is None or bot_client is None:
+                return
+
+            chat = getattr(update, "chat", None)
+            if chat is None:
+                return
+
+            if getattr(chat, "type", None) not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+                return
+
+            new_member = getattr(update, "new_chat_member", None)
+            if new_member is None:
+                return
+
+            me = await bot_client.get_me()
+            if getattr(getattr(new_member, "user", None), "id", None) != me.id:
+                return
+
+            if new_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                return
+
+            chat_id = chat.id
+            chat_title = getattr(chat, "title", None) or str(chat_id)
+            chat_type = "supergroup" if getattr(chat, "type", None) == ChatType.SUPERGROUP else "group"
+            member_count = getattr(chat, "members_count", 0) or 0
+
+            permissions = {
+                "is_owner": new_member.status == ChatMemberStatus.OWNER,
+                "can_delete_messages": getattr(new_member.privileges, "can_delete_messages", False) if hasattr(new_member, "privileges") else False,
+                "can_restrict_members": getattr(new_member.privileges, "can_restrict_members", False) if hasattr(new_member, "privileges") else False,
+                "can_promote_members": getattr(new_member.privileges, "can_promote_members", False) if hasattr(new_member, "privileges") else False,
+                "can_change_info": getattr(new_member.privileges, "can_change_info", False) if hasattr(new_member, "privileges") else False,
+                "can_invite_users": getattr(new_member.privileges, "can_invite_users", False) if hasattr(new_member, "privileges") else False,
+                "can_pin_messages": getattr(new_member.privileges, "can_pin_messages", False) if hasattr(new_member, "privileges") else False,
+                "can_manage_chat": getattr(new_member.privileges, "can_manage_chat", False) if hasattr(new_member, "privileges") else False,
+            }
+
+            await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
+
+            username = getattr(chat, "username", "") or ""
+            if username:
+                invite_link = f"https://t.me/{username}"
+            else:
+                chat_id_str = str(chat_id).replace("-100", "")
+                invite_link = f"https://t.me/c/{chat_id_str}"
+
+            admin_groups_col.update_one(
+                {"chat_id": chat_id},
+                {"$set": {"invite_link": invite_link, "username": username}},
+            )
+
+            if broadcast_groups_col is not None:
+                broadcast_groups_col.update_one(
+                    {"chat_id": chat_id},
+                    {"$set": {"chat_id": chat_id, "chat_title": chat_title, "updated_at": datetime.utcnow()}},
+                    upsert=True,
+                )
+        except Exception:
+            pass
+
     @bot_client.on_message(filters.all, group=-10)
     async def universal_command_router(client, message):
         """
@@ -6039,14 +6103,87 @@ def register_bot_handlers():
         current_group_ids = set()
 
         scan_client = get_next_client() or (user_clients[0][1] if user_clients else None)
+
+        # Bots cannot scan dialogs (messages.GetDialogs). If no user session is configured,
+        # fallback to syncing whatever is already stored in broadcast_groups_col.
         if scan_client is None:
-            return {
-                "total_seen": 0,
-                "saved": 0,
-                "removed": 0,
-                "errors": 1,
-                "last_error": "No user session configured. Bots cannot scan dialogs (messages.GetDialogs).",
-            }
+            try:
+                if bot_client is None:
+                    return {
+                        "total_seen": 0,
+                        "saved": 0,
+                        "removed": 0,
+                        "errors": 1,
+                        "last_error": "Bot not started yet.",
+                    }
+
+                me = await bot_client.get_me()
+                docs = list(broadcast_groups_col.find({}))
+                total_seen = len(docs)
+
+                for d in docs:
+                    try:
+                        chat_id = int(d.get("chat_id"))
+                        chat = await bot_client.get_chat(chat_id)
+                        chat_title = getattr(chat, "title", None) or d.get("chat_title") or str(chat_id)
+                        chat_type = "supergroup" if getattr(chat, "type", None) == ChatType.SUPERGROUP else "group"
+                        member_count = getattr(chat, "members_count", 0) or 0
+
+                        member = await bot_client.get_chat_member(chat_id, me.id)
+                        if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                            # Not admin anymore
+                            broadcast_groups_col.delete_one({"chat_id": chat_id})
+                            if admin_groups_col is not None:
+                                admin_groups_col.delete_one({"chat_id": chat_id})
+                            removed += 1
+                            continue
+
+                        permissions = {
+                            "is_owner": member.status == ChatMemberStatus.OWNER,
+                            "can_delete_messages": getattr(member.privileges, "can_delete_messages", False) if hasattr(member, "privileges") else False,
+                            "can_restrict_members": getattr(member.privileges, "can_restrict_members", False) if hasattr(member, "privileges") else False,
+                            "can_promote_members": getattr(member.privileges, "can_promote_members", False) if hasattr(member, "privileges") else False,
+                            "can_change_info": getattr(member.privileges, "can_change_info", False) if hasattr(member, "privileges") else False,
+                            "can_invite_users": getattr(member.privileges, "can_invite_users", False) if hasattr(member, "privileges") else False,
+                            "can_pin_messages": getattr(member.privileges, "can_pin_messages", False) if hasattr(member, "privileges") else False,
+                            "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if hasattr(member, "privileges") else False,
+                        }
+
+                        await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
+
+                        username = getattr(chat, "username", "") or ""
+                        if username:
+                            invite_link = f"https://t.me/{username}"
+                        else:
+                            chat_id_str = str(chat_id).replace("-100", "")
+                            invite_link = f"https://t.me/c/{chat_id_str}"
+
+                        if admin_groups_col is not None:
+                            admin_groups_col.update_one(
+                                {"chat_id": chat_id},
+                                {"$set": {"invite_link": invite_link, "username": username}},
+                            )
+
+                        saved += 1
+                    except Exception as e:
+                        errors += 1
+                        last_error = str(e)
+
+                return {
+                    "total_seen": total_seen,
+                    "saved": saved,
+                    "removed": removed,
+                    "errors": errors,
+                    "last_error": last_error or "No user session configured; synced from stored DB only.",
+                }
+            except Exception as e:
+                return {
+                    "total_seen": 0,
+                    "saved": 0,
+                    "removed": 0,
+                    "errors": 1,
+                    "last_error": f"No user session configured and fallback failed: {e}",
+                }
         
         try:
             async for dialog in scan_client.get_dialogs():
