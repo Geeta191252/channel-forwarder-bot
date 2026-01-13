@@ -7,7 +7,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy bot code
-COPY main.py .
+# IMPORTANT: the full-feature bot lives in koyeb-bot/main.py
+COPY koyeb-bot/main.py ./main.py
 
 EXPOSE 8000
 
