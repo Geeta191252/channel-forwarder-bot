@@ -1306,6 +1306,41 @@ def register_bot_handlers():
         
         return (is_bot_admin or is_group_admin, user_id)
 
+    # ============ ADMIN GROUPS HELPER FUNCTIONS ============
+    
+    async def save_admin_group(chat_id: int, chat_title: str, chat_type: str, member_count: int, permissions: dict):
+        """Save group where bot is admin with full permissions info"""
+        if admin_groups_col is None:
+            return False
+        try:
+            admin_groups_col.update_one(
+                {"chat_id": chat_id},
+                {"$set": {
+                    "chat_id": chat_id,
+                    "chat_title": chat_title,
+                    "chat_type": chat_type,
+                    "member_count": member_count,
+                    "permissions": permissions,
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            print(f"Error saving admin group: {e}")
+            return False
+
+    async def get_all_admin_groups():
+        """Get all groups where bot is admin"""
+        if admin_groups_col is None:
+            return []
+        try:
+            groups = list(admin_groups_col.find({}).sort("updated_at", -1))
+            return groups
+        except Exception as e:
+            print(f"Error getting admin groups: {e}")
+            return []
+
     @bot_client.on_message(filters.all, group=-10)
     async def universal_command_router(client, message):
         """
@@ -1338,6 +1373,255 @@ def register_bot_handlers():
         
         if _is_cmd(text, "start"):
             await handle_start(client, message)
+            message.stop_propagation()
+            return
+
+        if _is_cmd(text, "help"):
+            user_id = message.from_user.id if message.from_user else None
+            
+            # Show different help based on admin status
+            if user_id and user_id in ADMIN_IDS:
+                help_text = (
+                    "📚 **Available Commands:**\n\n"
+                    "**📤 Forwarding:**\n"
+                    "/start - Start the bot\n"
+                    "/help - Show this help message\n"
+                    "/forward - Start forwarding wizard\n"
+                    "/setconfig - Set source/dest channels\n"
+                    "/resume - Resume forwarding\n"
+                    "/stop - Stop forwarding\n"
+                    "/progress - Show progress\n"
+                    "/status - Show status\n"
+                    "/accounts - Show connected accounts\n\n"
+                    "**👥 Admin Groups:**\n"
+                    "/addgroup - Add/scan one group/channel\n"
+                    "/admingroups - List groups where bot is admin\n"
+                    "/refreshgroups - Refresh admin groups list\n\n"
+                    "**📢 Broadcast:**\n"
+                    "/broadcast - Send to all users (reply)\n"
+                    "/gbroadcast - Send to all groups (reply)\n"
+                    "/broadcaststats - View broadcast stats\n\n"
+                    "**🛡️ Moderation (in groups):**\n"
+                    "/enablemod - Enable moderation\n"
+                    "/blockforward - Block forwards\n"
+                    "/blocklinks - Block links\n"
+                    "/blockbadwords - Block bad content\n"
+                    "/blockmention - Block @mentions\n"
+                    "/autodelete2min - Auto-delete after 2min\n"
+                    "/modstatus - View settings\n\n"
+                    "**🔐 Force Join:**\n"
+                    "/setforcejoin - Set force join channel\n"
+                    "/removeforcejoin - Remove force join\n"
+                    "/forcejoininfo - View force join status\n\n"
+                    "**📥 Join Request:**\n"
+                    "/autoapprove - Enable auto-approve\n"
+                    "/stopapprove - Disable auto-approve\n"
+                    "/approveall - Approve all pending\n"
+                    "/approvelist - Show enabled channels\n\n"
+                    "**🖼️ Logo/Watermark:**\n"
+                    "/setlogo - Set logo (reply to image)\n"
+                    "/enablelogo - Enable watermark\n"
+                    "/disablelogo - Disable watermark\n"
+                    "/logoinfo - View logo settings\n\n"
+                    "**🔧 Other:**\n"
+                    "/myid - Show your Telegram ID\n"
+                    "/enablepublic - Enable public access\n"
+                    "/disablepublic - Disable public access"
+                )
+            else:
+                help_text = (
+                    "📚 **Available Commands:**\n\n"
+                    "**📤 Forwarding:**\n"
+                    "/start - Start the bot\n"
+                    "/help - Show this help message\n"
+                    "/forward - Start forwarding wizard\n\n"
+                    "**🛡️ Moderation (in groups):**\n"
+                    "/enablemod - Enable moderation\n"
+                    "/blockforward - Block forwards\n"
+                    "/blocklinks - Block links\n"
+                    "/blockbadwords - Block bad content\n"
+                    "/modstatus - View settings\n\n"
+                    "**🔧 Other:**\n"
+                    "/myid - Show your Telegram ID"
+                )
+            
+            await message.reply(
+                help_text,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📁 Help", callback_data="help")]
+                ])
+            )
+            message.stop_propagation()
+            return
+
+        if _is_cmd(text, "admingroups"):
+            if message.from_user is None or message.from_user.id not in ADMIN_IDS:
+                await message.reply("❌ Only admins can view admin groups.")
+                message.stop_propagation()
+                return
+            
+            groups = await get_all_admin_groups()
+            if not groups:
+                await message.reply(
+                    "📂 **No Admin Groups Found**\n\n"
+                    "Bot is not admin in any group/channel yet.\n\n"
+                    "**How to add:**\n"
+                    "1. Add bot as admin in group/channel\n"
+                    "2. Use /addgroup @username or /addgroup -100xxxxx\n"
+                    "3. Or use /refreshgroups to scan all"
+                )
+                message.stop_propagation()
+                return
+            
+            msg_lines = ["👥 **Groups Where Bot is Admin:**\n"]
+            for i, g in enumerate(groups[:20], 1):  # Limit to 20
+                title = g.get("chat_title", "Unknown")
+                chat_id = g.get("chat_id", "?")
+                link = g.get("invite_link", "") or g.get("username", "")
+                
+                if link:
+                    if link.startswith("@"):
+                        link = f"https://t.me/{link[1:]}"
+                    elif not link.startswith("http"):
+                        link = f"https://t.me/{link}"
+                    msg_lines.append(f"{i}. [{title}]({link})\n   ID: `{chat_id}`")
+                else:
+                    msg_lines.append(f"{i}. {title}\n   ID: `{chat_id}`")
+            
+            if len(groups) > 20:
+                msg_lines.append(f"\n... and {len(groups) - 20} more")
+            
+            msg_lines.append(f"\n📊 **Total:** {len(groups)} groups")
+            
+            await message.reply(
+                "\n".join(msg_lines),
+                disable_web_page_preview=True
+            )
+            message.stop_propagation()
+            return
+
+        if _is_cmd(text, "addgroup"):
+            if message.from_user is None or message.from_user.id not in ADMIN_IDS:
+                await message.reply("❌ Only admins can add groups.")
+                message.stop_propagation()
+                return
+            
+            # Parse group from command or reply
+            parts = text.split(maxsplit=1)
+            target = None
+            
+            if len(parts) > 1:
+                target = parts[1].strip()
+            elif message.reply_to_message and message.reply_to_message.forward_from_chat:
+                target = message.reply_to_message.forward_from_chat.id
+            
+            if not target:
+                await message.reply(
+                    "📂 **Add Group/Channel**\n\n"
+                    "**Usage:**\n"
+                    "`/addgroup @username` - Add by username\n"
+                    "`/addgroup -100xxxxxxxxxx` - Add by ID\n"
+                    "Or reply `/addgroup` to a forwarded message\n\n"
+                    "Bot must be admin in the group/channel!"
+                )
+                message.stop_propagation()
+                return
+            
+            status_msg = await message.reply("🔍 Scanning group/channel...")
+            
+            try:
+                # Get chat info
+                chat = await client.get_chat(target)
+                chat_id = chat.id
+                chat_title = chat.title or str(chat_id)
+                chat_type = str(chat.type)
+                member_count = getattr(chat, "members_count", 0) or 0
+                
+                # Check if bot is admin
+                try:
+                    me = await client.get_me()
+                    member = await client.get_chat_member(chat_id, me.id)
+                    status_str = str(member.status).lower()
+                    is_admin = "admin" in status_str or "creator" in status_str or "owner" in status_str
+                except Exception:
+                    is_admin = False
+                
+                if not is_admin:
+                    await status_msg.edit(
+                        f"❌ Bot is not admin in **{chat_title}**\n\n"
+                        f"Please make bot admin first, then try again."
+                    )
+                    message.stop_propagation()
+                    return
+                
+                # Get invite link
+                invite_link = ""
+                username = getattr(chat, "username", "") or ""
+                
+                if username:
+                    invite_link = f"https://t.me/{username}"
+                elif hasattr(chat, "invite_link") and chat.invite_link:
+                    invite_link = chat.invite_link
+                else:
+                    try:
+                        invite_link = await client.export_chat_invite_link(chat_id)
+                    except Exception:
+                        # Use internal link format
+                        chat_id_str = str(chat_id).replace("-100", "")
+                        invite_link = f"https://t.me/c/{chat_id_str}"
+                
+                # Get permissions
+                perms = {}
+                try:
+                    me = await client.get_me()
+                    member = await client.get_chat_member(chat_id, me.id)
+                    if hasattr(member, "privileges") and member.privileges:
+                        p = member.privileges
+                        perms = {
+                            "can_post_messages": getattr(p, "can_post_messages", False),
+                            "can_edit_messages": getattr(p, "can_edit_messages", False),
+                            "can_delete_messages": getattr(p, "can_delete_messages", False),
+                            "can_invite_users": getattr(p, "can_invite_users", False),
+                            "can_restrict_members": getattr(p, "can_restrict_members", False),
+                            "can_promote_members": getattr(p, "can_promote_members", False),
+                        }
+                except Exception:
+                    pass
+                
+                # Save to database
+                await save_admin_group(chat_id, chat_title, chat_type, member_count, perms)
+                
+                # Update with link
+                if admin_groups_col is not None:
+                    admin_groups_col.update_one(
+                        {"chat_id": chat_id},
+                        {"$set": {
+                            "invite_link": invite_link,
+                            "username": username
+                        }}
+                    )
+                
+                link_display = f"🔗 {invite_link}" if invite_link else "🔗 No link available"
+                
+                await status_msg.edit(
+                    f"✅ **Group Added!**\n\n"
+                    f"📂 **{chat_title}**\n"
+                    f"🆔 ID: `{chat_id}`\n"
+                    f"📊 Type: {chat_type}\n"
+                    f"👥 Members: {member_count}\n"
+                    f"{link_display}\n\n"
+                    f"Use /admingroups to see all groups."
+                )
+                
+            except Exception as e:
+                await status_msg.edit(
+                    f"❌ Failed to add group: {e}\n\n"
+                    f"Make sure:\n"
+                    f"• Bot is added to the group/channel\n"
+                    f"• Bot has admin permissions\n"
+                    f"• Username/ID is correct"
+                )
+            
             message.stop_propagation()
             return
 
