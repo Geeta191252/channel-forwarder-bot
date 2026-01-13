@@ -449,46 +449,92 @@ def get_all_admin_groups():
 
 
 async def refresh_admin_groups(client):
-    """Scan all dialogs and update admin groups in MongoDB"""
-    print("🔄 Refreshing admin groups...")
+    """Refresh admin groups/channels.
+
+    Prefer scanning via MTProto user sessions (SESSION_STRING, SESSION_STRING_2, ...),
+    because bot accounts generally cannot enumerate dialogs.
+
+    Falls back to scanning via the provided client if no user session is configured.
+    """
+    print("🔄 Refreshing admin groups/channels...", flush=True)
+
+    sessions = get_all_session_strings()
+    scan_clients = []  # list of (label, Client)
+
+    if sessions and API_ID and API_HASH:
+        for key, session_string in sessions:
+            try:
+                c = Client(
+                    f"scanner_{key.lower()}",
+                    api_id=int(API_ID),
+                    api_hash=API_HASH,
+                    session_string=session_string,
+                    in_memory=True,
+                )
+                scan_clients.append((key, c))
+            except Exception as e:
+                print(f"⚠️ Could not init session {key}: {e}", flush=True)
+    else:
+        # No user sessions configured → bot-only fallback
+        scan_clients.append(("BOT", client))
+
     admin_count = 0
-    
-    try:
-        async for dialog in client.get_dialogs():
-            chat = dialog.chat
-            # Bots can be admin in supergroups AND channels. Include both.
-            if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
-                try:
-                    me = await client.get_chat_member(chat.id, "me")
-                    if me.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                        permissions = {}
-                        if hasattr(me, 'privileges') and me.privileges:
-                            permissions = {
-                                "can_delete_messages": getattr(me.privileges, 'can_delete_messages', False),
-                                "can_restrict_members": getattr(me.privileges, 'can_restrict_members', False),
-                                "can_promote_members": getattr(me.privileges, 'can_promote_members', False),
-                                "can_change_info": getattr(me.privileges, 'can_change_info', False),
-                                "can_invite_users": getattr(me.privileges, 'can_invite_users', False),
-                                "can_pin_messages": getattr(me.privileges, 'can_pin_messages', False),
-                                "can_manage_chat": getattr(me.privileges, 'can_manage_chat', False),
-                            }
-                        
-                        member_count = chat.members_count or 0
-                        await save_admin_group(
-                            chat.id,
-                            chat.title,
-                            str(chat.type),
-                            member_count,
-                            permissions
-                        )
-                        admin_count += 1
-                except Exception as e:
-                    print(f"⚠️ Error checking {chat.title}: {e}")
+
+    for label, scan_client in scan_clients:
+        started_here = False
+        try:
+            if not getattr(scan_client, "is_connected", False):
+                await scan_client.start()
+                started_here = True
+
+            print(f"🔍 Scanning dialogs via {label}...", flush=True)
+            async for dialog in scan_client.get_dialogs():
+                chat = dialog.chat
+
+                if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
                     continue
-    except Exception as e:
-        print(f"❌ Error refreshing admin groups: {e}")
-    
-    print(f"✅ Found {admin_count} groups/channels where bot is admin")
+
+                try:
+                    me = await scan_client.get_chat_member(chat.id, "me")
+                    if me.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                        continue
+
+                    permissions = {}
+                    if hasattr(me, "privileges") and me.privileges:
+                        permissions = {
+                            "can_delete_messages": getattr(me.privileges, "can_delete_messages", False),
+                            "can_restrict_members": getattr(me.privileges, "can_restrict_members", False),
+                            "can_promote_members": getattr(me.privileges, "can_promote_members", False),
+                            "can_change_info": getattr(me.privileges, "can_change_info", False),
+                            "can_invite_users": getattr(me.privileges, "can_invite_users", False),
+                            "can_pin_messages": getattr(me.privileges, "can_pin_messages", False),
+                            "can_manage_chat": getattr(me.privileges, "can_manage_chat", False),
+                        }
+
+                    member_count = getattr(chat, "members_count", None) or 0
+                    await save_admin_group(
+                        chat.id,
+                        chat.title,
+                        str(chat.type),
+                        member_count,
+                        permissions,
+                    )
+                    admin_count += 1
+                except Exception as e:
+                    title = getattr(chat, "title", "Unknown")
+                    print(f"⚠️ [{label}] Error checking {title}: {e}", flush=True)
+                    continue
+
+        except Exception as e:
+            print(f"❌ [{label}] Error refreshing admin groups: {e}", flush=True)
+        finally:
+            if started_here:
+                try:
+                    await scan_client.stop()
+                except Exception:
+                    pass
+
+    print(f"✅ Found {admin_count} groups/channels where account is admin", flush=True)
     return admin_count
 
 
