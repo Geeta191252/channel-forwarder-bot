@@ -31,6 +31,7 @@ from pyrogram.errors import (
     MessageNotModified,
     ChatWriteForbidden,
     Forbidden,
+    PeerIdInvalid,
 )
 
 # Chat type helper: match both GROUP and SUPERGROUP reliably
@@ -1541,14 +1542,27 @@ def register_bot_handlers():
             for i, g in enumerate(groups[:20], 1):  # Limit to 20
                 title = g.get("chat_title", "Unknown")
                 chat_id = g.get("chat_id", "?")
-                link = g.get("invite_link", "") or g.get("username", "")
-                
-                if link:
-                    if link.startswith("@"):
-                        link = f"https://t.me/{link[1:]}"
-                    elif not link.startswith("http"):
-                        link = f"https://t.me/{link}"
-                    msg_lines.append(f"{i}. [{title}]({link})\n   ID: `{chat_id}`")
+
+                # Always try to show a clickable link.
+                # Priority: stored invite_link -> stored username -> internal t.me/c link.
+                invite_link = (g.get("invite_link") or "").strip()
+                username = (g.get("username") or "").strip()
+
+                link_url = ""
+                if invite_link:
+                    link_url = invite_link
+                elif username:
+                    link_url = f"https://t.me/{username[1:]}" if username.startswith("@") else f"https://t.me/{username}"
+                else:
+                    try:
+                        cid = int(chat_id)
+                        cid_str = str(cid).replace("-100", "").lstrip("-")
+                        link_url = f"https://t.me/c/{cid_str}"
+                    except Exception:
+                        link_url = ""
+
+                if link_url:
+                    msg_lines.append(f"{i}. [{title}]({link_url})\n   ID: `{chat_id}`")
                 else:
                     msg_lines.append(f"{i}. {title}\n   ID: `{chat_id}`")
             
