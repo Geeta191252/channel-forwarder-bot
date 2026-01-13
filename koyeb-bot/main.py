@@ -1392,8 +1392,35 @@ def register_bot_handlers():
                     f"**Commands:**\n"
                     f"Reply any message + `/broadcast` (users)\n"
                     f"Reply any message + `/gbroadcast` (groups)\n"
+                    f"`/refreshgroups` (re-scan groups)\n"
                     f"`/broadcaststats`"
                 )
+                message.stop_propagation()
+                return
+
+            # /refreshgroups (scan dialogs and rebuild groups list)
+            if _is_cmd(text, "refreshgroups"):
+                if message.from_user is None or message.from_user.id not in ADMIN_IDS:
+                    await message.reply("❌ Only admins can refresh groups.")
+                    message.stop_propagation()
+                    return
+
+                status_msg = await message.reply("🔄 Scanning groups... (this can take a bit)")
+
+                try:
+                    result = await refresh_broadcast_groups()
+                    group_count = broadcast_groups_col.count_documents({}) if broadcast_groups_col is not None else 0
+                    await status_msg.edit(
+                        "✅ **Groups Refreshed**\n\n"
+                        f"👀 Seen in dialogs: {result.get('total_seen', 0)}\n"
+                        f"✅ Saved (admin): {result.get('saved', 0)}\n"
+                        f"🗑️ Removed (not admin): {result.get('removed', 0)}\n"
+                        f"⚠️ Errors: {result.get('errors', 0)}\n\n"
+                        f"👥 Total Groups in DB: {group_count}"
+                    )
+                except Exception as e:
+                    await status_msg.edit(f"❌ refreshgroups failed: {e}")
+
                 message.stop_propagation()
                 return
 
@@ -5684,17 +5711,17 @@ def register_bot_handlers():
     async def save_group_for_broadcast(chat_id: int, chat_title: str = None):
         """Save group to broadcast list (only if bot is admin)"""
         if broadcast_groups_col is None:
-            return
+            return False
         try:
             # Check if bot is admin in this group
             try:
                 bot_me = await bot_client.get_me()
                 member = await bot_client.get_chat_member(chat_id, bot_me.id)
                 if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                    return  # Not admin, don't save
+                    return False  # Not admin, don't save
             except Exception:
-                return
-            
+                return False
+
             broadcast_groups_col.update_one(
                 {"chat_id": chat_id},
                 {"$set": {
@@ -5704,8 +5731,51 @@ def register_bot_handlers():
                 }},
                 upsert=True
             )
+            return True
         except Exception as e:
             print(f"Error saving group for broadcast: {e}")
+            return False
+
+    async def refresh_broadcast_groups() -> dict:
+        """Scan all dialogs and rebuild broadcast group list (admin-only command)."""
+        if broadcast_groups_col is None:
+            return {"total_seen": 0, "saved": 0, "removed": 0, "errors": 0}
+
+        total_seen = saved = removed = errors = 0
+        try:
+            async for dialog in bot_client.get_dialogs():
+                chat = getattr(dialog, "chat", None)
+                if chat is None:
+                    continue
+
+                if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+                    continue
+
+                total_seen += 1
+                chat_id = chat.id
+                chat_title = getattr(chat, "title", None)
+
+                try:
+                    ok = await save_group_for_broadcast(chat_id, chat_title)
+                    if ok:
+                        saved += 1
+                    else:
+                        # If it's in DB but we are not admin anymore, remove it
+                        try:
+                            if broadcast_groups_col.find_one({"chat_id": chat_id}):
+                                broadcast_groups_col.delete_one({"chat_id": chat_id})
+                                removed += 1
+                        except Exception:
+                            pass
+
+                except Exception:
+                    errors += 1
+
+        except Exception:
+            errors += 1
+
+        return {"total_seen": total_seen, "saved": saved, "removed": removed, "errors": errors}
+
 
     async def remove_group_from_broadcast(chat_id: int):
         """Remove group from broadcast list"""
@@ -5738,16 +5808,28 @@ def register_bot_handlers():
         except Exception:
             pass
 
-    # Track groups when bot is added or receives message
-    @bot_client.on_message(GROUP_CHAT, group=-100)
+    # Track groups when bot is added OR when a command is used in the group.
+    # Note: With Bot Privacy ON, bots may not receive normal messages. Commands + service updates are reliable.
+    @bot_client.on_message((GROUP_CHAT & (filters.command | filters.new_chat_members | filters.left_chat_member)), group=-100)
     async def track_group_broadcast(client, message):
         """Track group for broadcast"""
         try:
-            if message.chat and message.chat.id:
-                await save_group_for_broadcast(
-                    message.chat.id,
-                    message.chat.title
-                )
+            if not (message.chat and message.chat.id):
+                return
+
+            chat_id = message.chat.id
+
+            # If bot was removed from group, clean up
+            try:
+                if getattr(message, "left_chat_member", None) is not None:
+                    me = await bot_client.get_me()
+                    if message.left_chat_member.id == me.id:
+                        await remove_group_from_broadcast(chat_id)
+                        return
+            except Exception:
+                pass
+
+            await save_group_for_broadcast(chat_id, message.chat.title)
         except Exception:
             pass
 
