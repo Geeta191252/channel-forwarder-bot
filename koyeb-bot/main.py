@@ -1694,15 +1694,21 @@ def register_bot_handlers():
 
                 try:
                     result = await refresh_broadcast_groups()
-                    # Use admin_groups_col for accurate count (same as /admingroups)
-                    group_count = admin_groups_col.count_documents({}) if admin_groups_col is not None else 0
+                    broadcast_count = broadcast_groups_col.count_documents({}) if broadcast_groups_col is not None else 0
+                    admin_count = admin_groups_col.count_documents({}) if admin_groups_col is not None else 0
+                    err_line = ""
+                    if result.get("last_error"):
+                        err_line = f"\n❗ Last error: `{result.get('last_error')}`"
+
                     await status_msg.edit(
                         "✅ **Groups Refreshed**\n\n"
                         f"👀 Seen in dialogs: {result.get('total_seen', 0)}\n"
                         f"✅ Saved (admin): {result.get('saved', 0)}\n"
                         f"🗑️ Removed (not admin): {result.get('removed', 0)}\n"
                         f"⚠️ Errors: {result.get('errors', 0)}\n\n"
-                        f"👥 Total Groups in DB: {group_count}"
+                        f"👥 Broadcast DB: {broadcast_count}\n"
+                        f"🛡️ Admin DB: {admin_count}"
+                        f"{err_line}"
                     )
                 except Exception as e:
                     await status_msg.edit(f"❌ refreshgroups failed: {e}")
@@ -6029,6 +6035,7 @@ def register_bot_handlers():
             return {"total_seen": 0, "saved": 0, "removed": 0, "errors": 0}
 
         total_seen = saved = removed = errors = 0
+        last_error = None
         current_group_ids = set()
         
         try:
@@ -6051,7 +6058,7 @@ def register_bot_handlers():
                     ok = await save_group_for_broadcast(chat_id, chat_title)
                     if ok:
                         saved += 1
-                        # Also save to admin_groups_col with permissions
+                        # Also save to admin_groups_col with permissions (for /admingroups)
                         try:
                             bot_me = await bot_client.get_me()
                             member = await bot_client.get_chat_member(chat_id, bot_me.id)
@@ -6075,17 +6082,18 @@ def register_bot_handlers():
                             if broadcast_groups_col.find_one({"chat_id": chat_id}):
                                 broadcast_groups_col.delete_one({"chat_id": chat_id})
                                 removed += 1
-                            # Also remove from admin_groups_col
                             if admin_groups_col is not None:
                                 admin_groups_col.delete_one({"chat_id": chat_id})
                         except Exception:
                             pass
 
-                except Exception:
+                except Exception as e:
                     errors += 1
+                    last_error = str(e)
 
-        except Exception:
+        except Exception as e:
             errors += 1
+            last_error = str(e)
 
         # Remove groups from admin_groups_col that are no longer in dialogs
         try:
@@ -6094,13 +6102,16 @@ def register_bot_handlers():
                 for group in existing_groups:
                     if group["chat_id"] not in current_group_ids:
                         admin_groups_col.delete_one({"chat_id": group["chat_id"]})
-                        # Also remove from broadcast_groups_col
-                        if broadcast_groups_col is not None:
-                            broadcast_groups_col.delete_one({"chat_id": group["chat_id"]})
         except Exception:
             pass
 
-        return {"total_seen": total_seen, "saved": saved, "removed": removed, "errors": errors}
+        return {
+            "total_seen": total_seen,
+            "saved": saved,
+            "removed": removed,
+            "errors": errors,
+            "last_error": last_error,
+        }
 
 
     async def remove_group_from_broadcast(chat_id: int):
