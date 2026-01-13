@@ -71,6 +71,8 @@ bot_settings_col = db["bot_settings"] if db is not None else None
 group_forcejoin_col = db["group_forcejoin"] if db is not None else None  # Force join config per group
 new_member_wait_col = db["new_member_wait"] if db is not None else None  # Join-wait config per group
 joinwait_invites_col = db["joinwait_invites"] if db is not None else None  # Per-user invite/add counters
+broadcast_users_col = db["broadcast_users"] if db is not None else None  # Users who interacted with bot
+broadcast_groups_col = db["broadcast_groups"] if db is not None else None  # Groups where bot is admin
 
 # Force join config per group: {chat_id: {"channel_id": "", "channel_name": "", "invite_link": ""}}
 group_forcejoin_config = {}
@@ -5504,6 +5506,258 @@ def register_bot_handlers():
             )
         except Exception as e:
             await message.reply(f"❌ version error: {e}")
+
+    # ==================== BROADCAST FUNCTIONALITY ====================
+    
+    async def save_user_for_broadcast(user_id: int, username: str = None, first_name: str = None):
+        """Save user to broadcast list"""
+        if broadcast_users_col is None:
+            return
+        try:
+            broadcast_users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "user_id": user_id,
+                    "username": username,
+                    "first_name": first_name,
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"Error saving user for broadcast: {e}")
+
+    async def save_group_for_broadcast(chat_id: int, chat_title: str = None):
+        """Save group to broadcast list (only if bot is admin)"""
+        if broadcast_groups_col is None:
+            return
+        try:
+            # Check if bot is admin in this group
+            try:
+                bot_me = await bot_client.get_me()
+                member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                    return  # Not admin, don't save
+            except Exception:
+                return
+            
+            broadcast_groups_col.update_one(
+                {"chat_id": chat_id},
+                {"$set": {
+                    "chat_id": chat_id,
+                    "chat_title": chat_title,
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"Error saving group for broadcast: {e}")
+
+    async def remove_group_from_broadcast(chat_id: int):
+        """Remove group from broadcast list"""
+        if broadcast_groups_col is None:
+            return
+        try:
+            broadcast_groups_col.delete_one({"chat_id": chat_id})
+        except Exception as e:
+            print(f"Error removing group from broadcast: {e}")
+
+    async def remove_user_from_broadcast(user_id: int):
+        """Remove user from broadcast list"""
+        if broadcast_users_col is None:
+            return
+        try:
+            broadcast_users_col.delete_one({"user_id": user_id})
+        except Exception as e:
+            print(f"Error removing user from broadcast: {e}")
+
+    # Track users on /start
+    @bot_client.on_message(filters.command("start") & filters.private, group=-100)
+    async def track_user_broadcast(client, message):
+        """Track user for broadcast when they start bot"""
+        try:
+            await save_user_for_broadcast(
+                message.from_user.id,
+                message.from_user.username,
+                message.from_user.first_name
+            )
+        except Exception:
+            pass
+
+    # Track groups when bot is added or receives message
+    @bot_client.on_message(GROUP_CHAT, group=-100)
+    async def track_group_broadcast(client, message):
+        """Track group for broadcast"""
+        try:
+            if message.chat and message.chat.id:
+                await save_group_for_broadcast(
+                    message.chat.id,
+                    message.chat.title
+                )
+        except Exception:
+            pass
+
+    @bot_client.on_message(filters.command("broadcast") & filters.private)
+    async def broadcast_command(client, message):
+        """Broadcast message to all users - Admin only"""
+        if message.from_user.id not in ADMIN_IDS:
+            await message.reply("❌ Only admins can use broadcast.")
+            return
+        
+        # Check if reply to a message
+        if not message.reply_to_message:
+            await message.reply(
+                "📢 **Broadcast to Users**\n\n"
+                "Reply to any message (text/photo/video/document) with:\n"
+                "`/broadcast` - Send to all users\n\n"
+                "Example: Reply to a message and send /broadcast"
+            )
+            return
+        
+        status_msg = await message.reply("📢 Starting broadcast to users...")
+        
+        if broadcast_users_col is None:
+            await status_msg.edit("❌ Database not connected.")
+            return
+        
+        users = list(broadcast_users_col.find({}))
+        total = len(users)
+        success = 0
+        failed = 0
+        blocked = 0
+        
+        await status_msg.edit(f"📢 Broadcasting to {total} users...")
+        
+        for user in users:
+            try:
+                user_id = user.get("user_id")
+                if not user_id:
+                    continue
+                
+                # Copy the replied message to user
+                await message.reply_to_message.copy(user_id)
+                success += 1
+                
+                # Update status every 50 users
+                if success % 50 == 0:
+                    await status_msg.edit(
+                        f"📢 Broadcasting...\n"
+                        f"✅ Sent: {success}/{total}\n"
+                        f"❌ Failed: {failed}\n"
+                        f"🚫 Blocked: {blocked}"
+                    )
+                
+                await asyncio.sleep(0.05)  # Rate limit protection
+                
+            except Exception as e:
+                err_str = str(e).lower()
+                if "blocked" in err_str or "deactivated" in err_str or "user is deactivated" in err_str:
+                    blocked += 1
+                    await remove_user_from_broadcast(user_id)
+                else:
+                    failed += 1
+        
+        await status_msg.edit(
+            f"✅ **Broadcast Complete!**\n\n"
+            f"📊 Total users: {total}\n"
+            f"✅ Sent: {success}\n"
+            f"❌ Failed: {failed}\n"
+            f"🚫 Blocked (removed): {blocked}"
+        )
+
+    @bot_client.on_message(filters.command("gbroadcast") & filters.private)
+    async def group_broadcast_command(client, message):
+        """Broadcast message to all groups - Admin only"""
+        if message.from_user.id not in ADMIN_IDS:
+            await message.reply("❌ Only admins can use group broadcast.")
+            return
+        
+        # Check if reply to a message
+        if not message.reply_to_message:
+            await message.reply(
+                "📢 **Broadcast to Groups**\n\n"
+                "Reply to any message (text/photo/video/document) with:\n"
+                "`/gbroadcast` - Send to all groups where bot is admin\n\n"
+                "Example: Reply to a message and send /gbroadcast"
+            )
+            return
+        
+        status_msg = await message.reply("📢 Starting broadcast to groups...")
+        
+        if broadcast_groups_col is None:
+            await status_msg.edit("❌ Database not connected.")
+            return
+        
+        groups = list(broadcast_groups_col.find({}))
+        total = len(groups)
+        success = 0
+        failed = 0
+        removed = 0
+        
+        await status_msg.edit(f"📢 Broadcasting to {total} groups...")
+        
+        for group in groups:
+            try:
+                chat_id = group.get("chat_id")
+                if not chat_id:
+                    continue
+                
+                # Copy the replied message to group
+                await message.reply_to_message.copy(chat_id)
+                success += 1
+                
+                # Update status every 20 groups
+                if success % 20 == 0:
+                    await status_msg.edit(
+                        f"📢 Broadcasting to groups...\n"
+                        f"✅ Sent: {success}/{total}\n"
+                        f"❌ Failed: {failed}\n"
+                        f"🗑️ Removed: {removed}"
+                    )
+                
+                await asyncio.sleep(0.1)  # Rate limit protection
+                
+            except Exception as e:
+                err_str = str(e).lower()
+                if "forbidden" in err_str or "not a member" in err_str or "chat not found" in err_str or "kicked" in err_str:
+                    removed += 1
+                    await remove_group_from_broadcast(chat_id)
+                else:
+                    failed += 1
+        
+        await status_msg.edit(
+            f"✅ **Group Broadcast Complete!**\n\n"
+            f"📊 Total groups: {total}\n"
+            f"✅ Sent: {success}\n"
+            f"❌ Failed: {failed}\n"
+            f"🗑️ Removed (left/kicked): {removed}"
+        )
+
+    @bot_client.on_message(filters.command("broadcaststats") & filters.private)
+    async def broadcast_stats_command(client, message):
+        """Show broadcast statistics - Admin only"""
+        if message.from_user.id not in ADMIN_IDS:
+            await message.reply("❌ Only admins can view broadcast stats.")
+            return
+        
+        user_count = 0
+        group_count = 0
+        
+        if broadcast_users_col is not None:
+            user_count = broadcast_users_col.count_documents({})
+        
+        if broadcast_groups_col is not None:
+            group_count = broadcast_groups_col.count_documents({})
+        
+        await message.reply(
+            f"📊 **Broadcast Statistics**\n\n"
+            f"👤 Total Users: {user_count}\n"
+            f"👥 Total Groups: {group_count}\n\n"
+            f"**Commands:**\n"
+            f"`/broadcast` - Send to all users (reply to message)\n"
+            f"`/gbroadcast` - Send to all groups (reply to message)\n"
+            f"`/broadcaststats` - View this stats"
+        )
 
 
 # Flask routes for health checks
