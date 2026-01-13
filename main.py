@@ -804,19 +804,41 @@ if __name__ == "__main__":
         # Also track when bot receives any message in a group (fallback for missed events)
         @bot_client.on_message(filters.group | filters.channel, group=99)
         async def auto_track_on_message(client, message):
-            """Auto-track group when bot receives a message there."""
+            """Auto-track group when bot receives a message there - always update info."""
             chat = message.chat
             if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
                 return
             
-            # Check if already tracked
-            existing = get_all_admin_groups()
-            tracked_ids = [str(g.get("chat_id")) for g in existing]
-            if str(chat.id) in tracked_ids:
-                return
+            # Always try to track/update - this ensures links are updated
+            tracked = await auto_track_admin_group(client, chat)
             
-            # Try to track
-            await auto_track_admin_group(client, chat)
+            # If newly tracked or updated, send all groups list to admin
+            if tracked:
+                groups = get_all_admin_groups()
+                if groups and message.from_user:
+                    # Only notify if user is admin
+                    if message.from_user.id in ADMIN_IDS:
+                        text = "🔄 **Group scanned! All admin groups:**\n\n"
+                        for g in groups[:15]:
+                            username = g.get('username')
+                            invite_link = g.get('invite_link')
+                            if username:
+                                link = f"https://t.me/{username}"
+                            elif invite_link:
+                                link = invite_link
+                            else:
+                                link = "No link"
+                            
+                            text += f"• **{g.get('chat_title', 'Unknown')}**\n"
+                            text += f"  🔗 {link}\n\n"
+                        
+                        if len(groups) > 15:
+                            text += f"_...and {len(groups) - 15} more_"
+                        
+                        try:
+                            await message.reply(text, disable_web_page_preview=True)
+                        except Exception as e:
+                            print(f"⚠️ Could not send groups list: {e}", flush=True)
         
         # Run bot
         print("🤖 Starting Pyrogram bot client...")
