@@ -6037,9 +6037,19 @@ def register_bot_handlers():
         total_seen = saved = removed = errors = 0
         last_error = None
         current_group_ids = set()
+
+        scan_client = get_next_client() or (user_clients[0][1] if user_clients else None)
+        if scan_client is None:
+            return {
+                "total_seen": 0,
+                "saved": 0,
+                "removed": 0,
+                "errors": 1,
+                "last_error": "No user session configured. Bots cannot scan dialogs (messages.GetDialogs).",
+            }
         
         try:
-            async for dialog in bot_client.get_dialogs():
+            async for dialog in scan_client.get_dialogs():
                 chat = getattr(dialog, "chat", None)
                 if chat is None:
                     continue
@@ -6074,6 +6084,22 @@ def register_bot_handlers():
                                     "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if hasattr(member, "privileges") else False,
                                 }
                                 await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
+
+                                # Store link info so /admingroups can show clickable links
+                                username = getattr(chat, "username", "") or ""
+                                if username:
+                                    invite_link = f"https://t.me/{username}"
+                                elif getattr(chat, "invite_link", None):
+                                    invite_link = chat.invite_link
+                                else:
+                                    chat_id_str = str(chat_id).replace("-100", "")
+                                    invite_link = f"https://t.me/c/{chat_id_str}"
+
+                                if admin_groups_col is not None:
+                                    admin_groups_col.update_one(
+                                        {"chat_id": chat_id},
+                                        {"$set": {"invite_link": invite_link, "username": username}},
+                                    )
                         except Exception:
                             pass
                     else:
