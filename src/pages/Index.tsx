@@ -1,16 +1,23 @@
 import { useState, useEffect } from "react";
-import { Bot } from "lucide-react";
+import { Bot, Settings } from "lucide-react";
 import { BotConfig } from "@/components/BotConfig";
 import { StatusCard } from "@/components/StatusCard";
 import { BulkForward } from "@/components/BulkForward";
 import { ForceJoin } from "@/components/ForceJoin";
+import { AdminGroups } from "@/components/AdminGroups";
 import { supabase } from "@/integrations/supabase/client";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const Index = () => {
   const [isConfigured, setIsConfigured] = useState(false);
   const [config, setConfig] = useState<{ sourceChannel: string; destChannel: string } | null>(null);
   const [filesForwarded, setFilesForwarded] = useState(0);
   const [lastActivity, setLastActivity] = useState<string | null>(null);
+  const [botApiUrl, setBotApiUrl] = useState(() => {
+    return localStorage.getItem("botApiUrl") || "";
+  });
 
   const fetchStats = async () => {
     const { count } = await supabase
@@ -35,6 +42,10 @@ const Index = () => {
     const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("botApiUrl", botApiUrl);
+  }, [botApiUrl]);
 
   const handleConfigSaved = (newConfig: { sourceChannel: string; destChannel: string }) => {
     setConfig(newConfig);
@@ -63,6 +74,32 @@ const Index = () => {
             lastActivity={lastActivity}
           />
 
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings className="h-5 w-5" />
+                Bot API Settings
+              </CardTitle>
+              <CardDescription>
+                Enter your Koyeb bot URL to connect
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <Label htmlFor="botApiUrl">Bot API URL</Label>
+                <Input
+                  id="botApiUrl"
+                  placeholder="https://your-bot.koyeb.app"
+                  value={botApiUrl}
+                  onChange={(e) => setBotApiUrl(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Example: https://my-telegram-bot-xyz.koyeb.app
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
           <BotConfig onConfigSaved={handleConfigSaved} />
 
           {config && (
@@ -71,6 +108,8 @@ const Index = () => {
               destChannel={config.destChannel}
             />
           )}
+
+          <AdminGroups botApiUrl={botApiUrl} />
 
           <ForceJoin />
         </div>
