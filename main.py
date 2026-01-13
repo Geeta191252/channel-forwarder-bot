@@ -416,7 +416,7 @@ def remove_force_subscribe(channel_id):
 
 
 # Admin Groups Functions
-async def save_admin_group(chat_id, chat_title, chat_type, member_count, permissions):
+async def save_admin_group(chat_id, chat_title, chat_type, member_count, permissions, username=None, invite_link=None):
     """Save a group where bot is admin to MongoDB"""
     if admin_groups_col is not None:
         admin_groups_col.update_one(
@@ -427,6 +427,8 @@ async def save_admin_group(chat_id, chat_title, chat_type, member_count, permiss
                 "chat_type": chat_type,
                 "member_count": member_count,
                 "permissions": permissions,
+                "username": username,
+                "invite_link": invite_link,
                 "updated_at": datetime.utcnow()
             }},
             upsert=True
@@ -486,12 +488,24 @@ async def refresh_admin_groups(client):
                     }
                 
                 member_count = getattr(chat, "members_count", None) or 0
+                username = getattr(chat, "username", None)
+                
+                # Get invite link for private chats
+                invite_link = None
+                if not username:
+                    try:
+                        invite_link = await client.export_chat_invite_link(chat_id_int)
+                    except Exception as e:
+                        print(f"⚠️ Could not get invite link for {chat.title}: {e}", flush=True)
+                
                 await save_admin_group(
                     chat_id_int,
                     chat.title,
                     str(chat.type),
                     member_count,
                     permissions,
+                    username,
+                    invite_link,
                 )
                 admin_count += 1
             else:
@@ -530,12 +544,24 @@ async def auto_track_admin_group(client, chat):
                 }
             
             member_count = getattr(chat, "members_count", None) or 0
+            username = getattr(chat, "username", None)
+            
+            # Get invite link for private chats
+            invite_link = None
+            if not username:
+                try:
+                    invite_link = await client.export_chat_invite_link(chat.id)
+                except Exception as e:
+                    print(f"⚠️ Could not get invite link for {chat.title}: {e}", flush=True)
+            
             await save_admin_group(
                 chat.id,
                 chat.title,
                 str(chat.type),
                 member_count,
                 permissions,
+                username,
+                invite_link,
             )
             print(f"✅ Auto-tracked admin group: {chat.title}", flush=True)
             return True
@@ -650,15 +676,28 @@ if __name__ == "__main__":
             
             text = "📋 **Groups/Channels where bot is admin:**\n\n"
             for g in groups[:20]:
+                # Determine link
+                username = g.get('username')
+                invite_link = g.get('invite_link')
+                if username:
+                    link = f"https://t.me/{username}"
+                elif invite_link:
+                    link = invite_link
+                else:
+                    link = None
+                
                 text += f"• **{g.get('chat_title', 'Unknown')}**\n"
                 text += f"  ID: `{g.get('chat_id')}`\n"
                 text += f"  Type: {g.get('chat_type', '')}\n"
-                text += f"  Members: {g.get('member_count', 0)}\n\n"
+                text += f"  Members: {g.get('member_count', 0)}\n"
+                if link:
+                    text += f"  🔗 {link}\n"
+                text += "\n"
             
             if len(groups) > 20:
                 text += f"\n_...and {len(groups) - 20} more chats_"
             
-            await message.reply_text(text)
+            await message.reply_text(text, disable_web_page_preview=True)
         
         @bot_client.on_message(filters.command("refreshgroups") & filters.private)
         async def refreshgroups_command(client, message):
