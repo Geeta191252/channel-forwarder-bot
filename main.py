@@ -449,93 +449,99 @@ def get_all_admin_groups():
 
 
 async def refresh_admin_groups(client):
-    """Refresh admin groups/channels.
-
-    Prefer scanning via MTProto user sessions (SESSION_STRING, SESSION_STRING_2, ...),
-    because bot accounts generally cannot enumerate dialogs.
-
-    Falls back to scanning via the provided client if no user session is configured.
+    """Refresh admin groups by verifying existing saved groups.
+    
+    Bot accounts cannot enumerate dialogs, so we only verify
+    groups already saved in the database (from on_chat_member_updated events).
     """
     print("🔄 Refreshing admin groups/channels...", flush=True)
-
-    sessions = get_all_session_strings()
-    scan_clients = []  # list of (label, Client)
-
-    if sessions and API_ID and API_HASH:
-        for key, session_string in sessions:
-            try:
-                c = Client(
-                    f"scanner_{key.lower()}",
-                    api_id=int(API_ID),
-                    api_hash=API_HASH,
-                    session_string=session_string,
-                    in_memory=True,
-                )
-                scan_clients.append((key, c))
-            except Exception as e:
-                print(f"⚠️ Could not init session {key}: {e}", flush=True)
-    else:
-        # No user sessions configured → bot-only fallback
-        scan_clients.append(("BOT", client))
-
+    
+    # Get all saved groups and verify each one
+    saved_groups = get_all_admin_groups()
     admin_count = 0
-
-    for label, scan_client in scan_clients:
-        started_here = False
+    removed_count = 0
+    
+    for group in saved_groups:
+        chat_id = group.get("chat_id")
+        if not chat_id:
+            continue
+        
         try:
-            if not getattr(scan_client, "is_connected", False):
-                await scan_client.start()
-                started_here = True
-
-            print(f"🔍 Scanning dialogs via {label}...", flush=True)
-            async for dialog in scan_client.get_dialogs():
-                chat = dialog.chat
-
-                if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
-                    continue
-
-                try:
-                    me = await scan_client.get_chat_member(chat.id, "me")
-                    if me.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                        continue
-
-                    permissions = {}
-                    if hasattr(me, "privileges") and me.privileges:
-                        permissions = {
-                            "can_delete_messages": getattr(me.privileges, "can_delete_messages", False),
-                            "can_restrict_members": getattr(me.privileges, "can_restrict_members", False),
-                            "can_promote_members": getattr(me.privileges, "can_promote_members", False),
-                            "can_change_info": getattr(me.privileges, "can_change_info", False),
-                            "can_invite_users": getattr(me.privileges, "can_invite_users", False),
-                            "can_pin_messages": getattr(me.privileges, "can_pin_messages", False),
-                            "can_manage_chat": getattr(me.privileges, "can_manage_chat", False),
-                        }
-
-                    member_count = getattr(chat, "members_count", None) or 0
-                    await save_admin_group(
-                        chat.id,
-                        chat.title,
-                        str(chat.type),
-                        member_count,
-                        permissions,
-                    )
-                    admin_count += 1
-                except Exception as e:
-                    title = getattr(chat, "title", "Unknown")
-                    print(f"⚠️ [{label}] Error checking {title}: {e}", flush=True)
-                    continue
-
+            chat_id_int = int(chat_id)
+            chat = await client.get_chat(chat_id_int)
+            me = await client.get_chat_member(chat_id_int, "me")
+            
+            if me.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                # Update info
+                permissions = {}
+                if hasattr(me, "privileges") and me.privileges:
+                    permissions = {
+                        "can_delete_messages": getattr(me.privileges, "can_delete_messages", False),
+                        "can_restrict_members": getattr(me.privileges, "can_restrict_members", False),
+                        "can_promote_members": getattr(me.privileges, "can_promote_members", False),
+                        "can_change_info": getattr(me.privileges, "can_change_info", False),
+                        "can_invite_users": getattr(me.privileges, "can_invite_users", False),
+                        "can_pin_messages": getattr(me.privileges, "can_pin_messages", False),
+                        "can_manage_chat": getattr(me.privileges, "can_manage_chat", False),
+                    }
+                
+                member_count = getattr(chat, "members_count", None) or 0
+                await save_admin_group(
+                    chat_id_int,
+                    chat.title,
+                    str(chat.type),
+                    member_count,
+                    permissions,
+                )
+                admin_count += 1
+            else:
+                # No longer admin - remove
+                await remove_admin_group(chat_id_int)
+                removed_count += 1
+                print(f"➖ Removed {chat.title} - no longer admin", flush=True)
+                
+        except (ChannelPrivate, Forbidden) as e:
+            # Bot kicked or channel made private - remove
+            await remove_admin_group(int(chat_id))
+            removed_count += 1
+            print(f"➖ Removed chat {chat_id} - access denied", flush=True)
         except Exception as e:
-            print(f"❌ [{label}] Error refreshing admin groups: {e}", flush=True)
-        finally:
-            if started_here:
-                try:
-                    await scan_client.stop()
-                except Exception:
-                    pass
-
-    print(f"✅ Found {admin_count} groups/channels where account is admin", flush=True)
+            print(f"⚠️ Error checking chat {chat_id}: {e}", flush=True)
+    
+    print(f"✅ Verified {admin_count} groups/channels, removed {removed_count}", flush=True)
     return admin_count
+
+
+async def auto_track_admin_group(client, chat):
+    """Auto-track a group/channel when bot is added as admin."""
+    try:
+        me = await client.get_chat_member(chat.id, "me")
+        if me.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+            permissions = {}
+            if hasattr(me, "privileges") and me.privileges:
+                permissions = {
+                    "can_delete_messages": getattr(me.privileges, "can_delete_messages", False),
+                    "can_restrict_members": getattr(me.privileges, "can_restrict_members", False),
+                    "can_promote_members": getattr(me.privileges, "can_promote_members", False),
+                    "can_change_info": getattr(me.privileges, "can_change_info", False),
+                    "can_invite_users": getattr(me.privileges, "can_invite_users", False),
+                    "can_pin_messages": getattr(me.privileges, "can_pin_messages", False),
+                    "can_manage_chat": getattr(me.privileges, "can_manage_chat", False),
+                }
+            
+            member_count = getattr(chat, "members_count", None) or 0
+            await save_admin_group(
+                chat.id,
+                chat.title,
+                str(chat.type),
+                member_count,
+                permissions,
+            )
+            print(f"✅ Auto-tracked admin group: {chat.title}", flush=True)
+            return True
+    except Exception as e:
+        print(f"⚠️ Error auto-tracking {getattr(chat, 'title', chat.id)}: {e}", flush=True)
+    return False
 
 
 # Flask routes
@@ -662,7 +668,52 @@ if __name__ == "__main__":
             
             msg = await message.reply_text("🔄 Refreshing admin groups/channels...")
             count = await refresh_admin_groups(client)
-            await msg.edit_text(f"✅ Found **{count}** groups/channels where bot is admin.")
+            await msg.edit_text(f"✅ Verified **{count}** groups/channels where bot is admin.\n\n💡 _Tip: Add bot to groups/channels as admin and it will auto-track them!_")
+        
+        # Auto-track when bot is added to a group or made admin
+        @bot_client.on_chat_member_updated()
+        async def on_chat_member_update(client, chat_member_updated):
+            """Auto-track when bot becomes admin in a group/channel."""
+            try:
+                # Check if this update is about the bot itself
+                new_member = chat_member_updated.new_chat_member
+                if not new_member:
+                    return
+                
+                bot_id = (await client.get_me()).id
+                if new_member.user.id != bot_id:
+                    return
+                
+                chat = chat_member_updated.chat
+                if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+                    return
+                
+                # Check if bot became admin
+                if new_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                    await auto_track_admin_group(client, chat)
+                elif new_member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
+                    # Bot demoted or left - remove from tracked
+                    await remove_admin_group(chat.id)
+                    print(f"➖ Removed {chat.title} - bot demoted/left", flush=True)
+            except Exception as e:
+                print(f"⚠️ Error in chat_member_update: {e}", flush=True)
+        
+        # Also track when bot receives any message in a group (fallback for missed events)
+        @bot_client.on_message(filters.group | filters.channel, group=99)
+        async def auto_track_on_message(client, message):
+            """Auto-track group when bot receives a message there."""
+            chat = message.chat
+            if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+                return
+            
+            # Check if already tracked
+            existing = get_all_admin_groups()
+            tracked_ids = [str(g.get("chat_id")) for g in existing]
+            if str(chat.id) in tracked_ids:
+                return
+            
+            # Try to track
+            await auto_track_admin_group(client, chat)
         
         # Run bot
         print("🤖 Starting Pyrogram bot client...")
