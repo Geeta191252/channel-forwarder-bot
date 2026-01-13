@@ -1694,7 +1694,8 @@ def register_bot_handlers():
 
                 try:
                     result = await refresh_broadcast_groups()
-                    group_count = broadcast_groups_col.count_documents({}) if broadcast_groups_col is not None else 0
+                    # Use admin_groups_col for accurate count (same as /admingroups)
+                    group_count = admin_groups_col.count_documents({}) if admin_groups_col is not None else 0
                     await status_msg.edit(
                         "✅ **Groups Refreshed**\n\n"
                         f"👀 Seen in dialogs: {result.get('total_seen', 0)}\n"
@@ -6022,11 +6023,14 @@ def register_bot_handlers():
             return False
 
     async def refresh_broadcast_groups() -> dict:
-        """Scan all dialogs and rebuild broadcast group list (admin-only command)."""
+        """Scan all dialogs and rebuild broadcast group list (admin-only command).
+        Also syncs admin_groups_col for /admingroups command."""
         if broadcast_groups_col is None:
             return {"total_seen": 0, "saved": 0, "removed": 0, "errors": 0}
 
         total_seen = saved = removed = errors = 0
+        current_group_ids = set()
+        
         try:
             async for dialog in bot_client.get_dialogs():
                 chat = getattr(dialog, "chat", None)
@@ -6038,18 +6042,42 @@ def register_bot_handlers():
 
                 total_seen += 1
                 chat_id = chat.id
-                chat_title = getattr(chat, "title", None)
+                chat_title = getattr(chat, "title", "Unknown Group")
+                chat_type = "supergroup" if chat.type == ChatType.SUPERGROUP else "group"
+                member_count = getattr(chat, "members_count", 0) or 0
+                current_group_ids.add(chat_id)
 
                 try:
                     ok = await save_group_for_broadcast(chat_id, chat_title)
                     if ok:
                         saved += 1
+                        # Also save to admin_groups_col with permissions
+                        try:
+                            bot_me = await bot_client.get_me()
+                            member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                            if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                                permissions = {
+                                    "is_owner": member.status == ChatMemberStatus.OWNER,
+                                    "can_delete_messages": getattr(member.privileges, "can_delete_messages", False) if hasattr(member, "privileges") else False,
+                                    "can_restrict_members": getattr(member.privileges, "can_restrict_members", False) if hasattr(member, "privileges") else False,
+                                    "can_promote_members": getattr(member.privileges, "can_promote_members", False) if hasattr(member, "privileges") else False,
+                                    "can_change_info": getattr(member.privileges, "can_change_info", False) if hasattr(member, "privileges") else False,
+                                    "can_invite_users": getattr(member.privileges, "can_invite_users", False) if hasattr(member, "privileges") else False,
+                                    "can_pin_messages": getattr(member.privileges, "can_pin_messages", False) if hasattr(member, "privileges") else False,
+                                    "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if hasattr(member, "privileges") else False,
+                                }
+                                await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
+                        except Exception:
+                            pass
                     else:
                         # If it's in DB but we are not admin anymore, remove it
                         try:
                             if broadcast_groups_col.find_one({"chat_id": chat_id}):
                                 broadcast_groups_col.delete_one({"chat_id": chat_id})
                                 removed += 1
+                            # Also remove from admin_groups_col
+                            if admin_groups_col is not None:
+                                admin_groups_col.delete_one({"chat_id": chat_id})
                         except Exception:
                             pass
 
@@ -6058,6 +6086,19 @@ def register_bot_handlers():
 
         except Exception:
             errors += 1
+
+        # Remove groups from admin_groups_col that are no longer in dialogs
+        try:
+            if admin_groups_col is not None:
+                existing_groups = list(admin_groups_col.find({}, {"chat_id": 1}))
+                for group in existing_groups:
+                    if group["chat_id"] not in current_group_ids:
+                        admin_groups_col.delete_one({"chat_id": group["chat_id"]})
+                        # Also remove from broadcast_groups_col
+                        if broadcast_groups_col is not None:
+                            broadcast_groups_col.delete_one({"chat_id": group["chat_id"]})
+        except Exception:
+            pass
 
         return {"total_seen": total_seen, "saved": saved, "removed": removed, "errors": errors}
 
