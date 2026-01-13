@@ -456,7 +456,8 @@ async def refresh_admin_groups(client):
     try:
         async for dialog in client.get_dialogs():
             chat = dialog.chat
-            if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+            # Bots can be admin in supergroups AND channels. Include both.
+            if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
                 try:
                     me = await client.get_chat_member(chat.id, "me")
                     if me.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
@@ -487,7 +488,7 @@ async def refresh_admin_groups(client):
     except Exception as e:
         print(f"❌ Error refreshing admin groups: {e}")
     
-    print(f"✅ Found {admin_count} groups where bot is admin")
+    print(f"✅ Found {admin_count} groups/channels where bot is admin")
     return admin_count
 
 
@@ -580,8 +581,8 @@ if __name__ == "__main__":
                 "📚 **Available Commands:**\n\n"
                 "/start - Start the bot\n"
                 "/help - Show this help message\n"
-                "/admingroups - List groups where bot is admin\n"
-                "/refreshgroups - Refresh admin groups list"
+                "/admingroups - List groups/channels where bot is admin\n"
+                "/refreshgroups - Refresh admin groups/channels list"
             )
         
         @bot_client.on_message(filters.command("admingroups") & filters.private)
@@ -592,17 +593,18 @@ if __name__ == "__main__":
             
             groups = get_all_admin_groups()
             if not groups:
-                await message.reply_text("📭 No admin groups found. Use /refreshgroups to scan.")
+                await message.reply_text("📭 No admin groups/channels found. Use /refreshgroups to scan.")
                 return
             
-            text = "📋 **Groups where bot is admin:**\n\n"
+            text = "📋 **Groups/Channels where bot is admin:**\n\n"
             for g in groups[:20]:
                 text += f"• **{g.get('chat_title', 'Unknown')}**\n"
                 text += f"  ID: `{g.get('chat_id')}`\n"
+                text += f"  Type: {g.get('chat_type', '')}\n"
                 text += f"  Members: {g.get('member_count', 0)}\n\n"
             
             if len(groups) > 20:
-                text += f"\n_...and {len(groups) - 20} more groups_"
+                text += f"\n_...and {len(groups) - 20} more chats_"
             
             await message.reply_text(text)
         
@@ -612,9 +614,9 @@ if __name__ == "__main__":
                 await message.reply_text("❌ You are not authorized.")
                 return
             
-            msg = await message.reply_text("🔄 Refreshing admin groups...")
+            msg = await message.reply_text("🔄 Refreshing admin groups/channels...")
             count = await refresh_admin_groups(client)
-            await msg.edit_text(f"✅ Found **{count}** groups where bot is admin.")
+            await msg.edit_text(f"✅ Found **{count}** groups/channels where bot is admin.")
         
         # Run bot
         print("🤖 Starting Pyrogram bot client...")
