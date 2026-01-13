@@ -6208,8 +6208,8 @@ def register_bot_handlers():
             pass
 
     # Track groups when bot is added OR when a command is used in the group.
-    # Note: With Bot Privacy ON, bots may not receive normal messages. Commands + service updates are reliable.
-    @bot_client.on_message((GROUP_CHAT & (filters.command | filters.new_chat_members | filters.left_chat_member)), group=-100)
+    # Note: With Bot Privacy ON, bots may not receive normal messages. Service updates are reliable.
+    @bot_client.on_message((GROUP_CHAT & (filters.new_chat_members | filters.left_chat_member)), group=-100)
     async def track_group_broadcast(client, message):
         """Track group for broadcast"""
         try:
