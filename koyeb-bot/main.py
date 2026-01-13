@@ -3889,7 +3889,9 @@ def register_bot_handlers():
     @bot_client.on_message(
         GROUP_CHAT
         & ~filters.regex(
-            r"^/(setjoinwait|removejoinwait|joinwaitstatus|setforcejoin|removeforcejoin|forcejoininfo|enablemod|disablemod|blockforward|blocklinks|blockbadwords|blockmention|autodelete2min|modstatus|warnings|resetwarnings)(?:@[A-Za-z0-9_]+)?(?:\s|$)"
+            # Don't auto-delete commands in groups; commands must reach handlers.
+            # This keeps JoinWait "instant delete" for normal messages while allowing /commands.
+            r"^/(?:[A-Za-z0-9_]{1,32})(?:@[A-Za-z0-9_]+)?(?:\s|$)"
         ),
         # Run as early as possible so the user's message disappears instantly.
         group=-999,
