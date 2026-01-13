@@ -711,10 +711,67 @@ if __name__ == "__main__":
                 "📚 **Available Commands:**\n\n"
                 "/start - Start the bot\n"
                 "/help - Show this help message\n"
+                "/addgroup - Add/scan one group/channel (no message in group)\n"
                 "/admingroups - List groups/channels where bot is admin\n"
-                "/refreshgroups - Refresh admin groups/channels list"
+                "/refreshgroups - Refresh saved admin groups list"
             )
-        
+
+        @bot_client.on_message(filters.command("addgroup") & filters.private)
+        async def addgroup_command(client, message):
+            if not message.from_user or message.from_user.id not in ADMIN_IDS:
+                await message.reply_text("❌ You are not authorized.")
+                return
+
+            # Usage:
+            # 1) /addgroup @username
+            # 2) /addgroup -1001234567890
+            # 3) Reply to a forwarded message from the group/channel with /addgroup
+            chat_ref = None
+
+            # If admin replied to a forwarded message, extract chat from forward
+            if message.reply_to_message and getattr(message.reply_to_message, "forward_from_chat", None):
+                chat_ref = message.reply_to_message.forward_from_chat.id
+            else:
+                parts = message.text.split(maxsplit=1)
+                if len(parts) == 2:
+                    chat_ref = parts[1].strip()
+
+            if not chat_ref:
+                await message.reply_text(
+                    "➕ **Add group/channel for scanning**\n\n"
+                    "Send one of these:\n"
+                    "• `/addgroup @channelusername`\n"
+                    "• `/addgroup -1001234567890`\n\n"
+                    "Or: **forward any message from that group/channel** to me, then reply to it with `/addgroup`.\n\n"
+                    "(This does **not** send any message in the group.)",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            try:
+                # Normalize numeric IDs
+                if isinstance(chat_ref, str) and (chat_ref.lstrip("-").isdigit()):
+                    chat_ref = int(chat_ref)
+
+                chat = await client.get_chat(chat_ref)
+            except Exception as e:
+                await message.reply_text(f"❌ Chat not found / access denied. ({type(e).__name__}: {e})")
+                return
+
+            tracked = await auto_track_admin_group(client, chat)
+            if not tracked:
+                await message.reply_text(
+                    "⚠️ I can see the chat, but I'm **not admin** there.\n\n"
+                    "Make me **Admin** in that group/channel, then run `/addgroup` again.",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            await message.reply_text(
+                f"✅ Added/updated: **{chat.title}**\n\nNow use /admingroups to see the full list.",
+                disable_web_page_preview=True,
+            )
+
         @bot_client.on_message(filters.command("admingroups") & filters.private)
         async def admingroups_command(client, message):
             if message.from_user.id not in ADMIN_IDS:
@@ -770,7 +827,7 @@ if __name__ == "__main__":
                 f"• Verified: **{verified}** groups/channels\n"
                 f"• Removed: **{removed}** (no longer admin)\n"
                 f"• Total checked: **{checked}**\n\n"
-                f"💡 _Tip: Add bot to groups/channels as admin and it will auto-track them!_"
+                f"💡 _Note: Telegram bots cannot auto-scan all chats. If Total checked is 0, add chats using /addgroup (via @username, ID, or forwarding a message) then run /refreshgroups._"
             )
         
         # Auto-track when bot is added to a group or made admin
@@ -804,42 +861,14 @@ if __name__ == "__main__":
         # Also track when bot receives any message in a group (fallback for missed events)
         @bot_client.on_message(filters.group | filters.channel, group=99)
         async def auto_track_on_message(client, message):
-            """Auto-track group when bot receives a message there - always update info."""
+            """Auto-track group silently when bot sees activity (NO replies in group)."""
             chat = message.chat
             if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
                 return
-            
-            # Always try to track/update - this ensures links are updated
-            tracked = await auto_track_admin_group(client, chat)
-            
-            # If newly tracked or updated, send all groups list to admin
-            if tracked:
-                groups = get_all_admin_groups()
-                if groups and message.from_user:
-                    # Only notify if user is admin
-                    if message.from_user.id in ADMIN_IDS:
-                        text = "🔄 **Group scanned! All admin groups:**\n\n"
-                        for g in groups[:15]:
-                            username = g.get('username')
-                            invite_link = g.get('invite_link')
-                            if username:
-                                link = f"https://t.me/{username}"
-                            elif invite_link:
-                                link = invite_link
-                            else:
-                                link = "No link"
-                            
-                            text += f"• **{g.get('chat_title', 'Unknown')}**\n"
-                            text += f"  🔗 {link}\n\n"
-                        
-                        if len(groups) > 15:
-                            text += f"_...and {len(groups) - 15} more_"
-                        
-                        try:
-                            await message.reply(text, disable_web_page_preview=True)
-                        except Exception as e:
-                            print(f"⚠️ Could not send groups list: {e}", flush=True)
-        
+
+            # Best-effort update; do not reply in the group
+            await auto_track_admin_group(client, chat)
+            return
         # Run bot
         print("🤖 Starting Pyrogram bot client...")
         bot_client.run()
