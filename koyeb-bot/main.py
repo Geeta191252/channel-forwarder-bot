@@ -73,6 +73,7 @@ new_member_wait_col = db["new_member_wait"] if db is not None else None  # Join-
 joinwait_invites_col = db["joinwait_invites"] if db is not None else None  # Per-user invite/add counters
 broadcast_users_col = db["broadcast_users"] if db is not None else None  # Users who interacted with bot
 broadcast_groups_col = db["broadcast_groups"] if db is not None else None  # Groups where bot is admin
+admin_groups_col = db["admin_groups"] if db is not None else None  # Groups where bot is admin with permissions
 
 # Force join config per group: {chat_id: {"channel_id": "", "channel_name": "", "invite_link": ""}}
 group_forcejoin_config = {}
@@ -5795,6 +5796,120 @@ def register_bot_handlers():
         except Exception as e:
             print(f"Error removing user from broadcast: {e}")
 
+    # ==================== ADMIN GROUPS MANAGEMENT ====================
+    
+    async def save_admin_group(chat_id: int, chat_title: str, chat_type: str, member_count: int, permissions: dict):
+        """Save group where bot is admin with full permissions info"""
+        if admin_groups_col is None:
+            return False
+        try:
+            admin_groups_col.update_one(
+                {"chat_id": chat_id},
+                {"$set": {
+                    "chat_id": chat_id,
+                    "chat_title": chat_title,
+                    "chat_type": chat_type,
+                    "member_count": member_count,
+                    "permissions": permissions,
+                    "updated_at": datetime.utcnow()
+                }},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            print(f"Error saving admin group: {e}")
+            return False
+
+    async def remove_admin_group(chat_id: int):
+        """Remove group from admin groups list"""
+        if admin_groups_col is None:
+            return
+        try:
+            admin_groups_col.delete_one({"chat_id": chat_id})
+        except Exception as e:
+            print(f"Error removing admin group: {e}")
+
+    async def get_all_admin_groups():
+        """Get all groups where bot is admin"""
+        if admin_groups_col is None:
+            return []
+        try:
+            groups = list(admin_groups_col.find({}).sort("updated_at", -1))
+            return groups
+        except Exception as e:
+            print(f"Error getting admin groups: {e}")
+            return []
+
+    async def refresh_admin_groups() -> dict:
+        """Scan all dialogs and update admin groups with permissions"""
+        if admin_groups_col is None:
+            return {"total_seen": 0, "saved": 0, "removed": 0, "errors": 0}
+
+        total_seen = saved = removed = errors = 0
+        current_group_ids = set()
+        
+        try:
+            async for dialog in bot_client.get_dialogs():
+                chat = getattr(dialog, "chat", None)
+                if chat is None:
+                    continue
+
+                if chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+                    continue
+
+                total_seen += 1
+                chat_id = chat.id
+                current_group_ids.add(chat_id)
+                chat_title = getattr(chat, "title", "Unknown Group")
+                chat_type = "supergroup" if chat.type == ChatType.SUPERGROUP else "group"
+                member_count = getattr(chat, "members_count", 0) or 0
+
+                try:
+                    # Check if bot is admin and get permissions
+                    bot_me = await bot_client.get_me()
+                    member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                    
+                    if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                        # Extract permissions
+                        permissions = {
+                            "is_owner": member.status == ChatMemberStatus.OWNER,
+                            "can_delete_messages": getattr(member.privileges, "can_delete_messages", False) if hasattr(member, "privileges") else False,
+                            "can_restrict_members": getattr(member.privileges, "can_restrict_members", False) if hasattr(member, "privileges") else False,
+                            "can_promote_members": getattr(member.privileges, "can_promote_members", False) if hasattr(member, "privileges") else False,
+                            "can_change_info": getattr(member.privileges, "can_change_info", False) if hasattr(member, "privileges") else False,
+                            "can_invite_users": getattr(member.privileges, "can_invite_users", False) if hasattr(member, "privileges") else False,
+                            "can_pin_messages": getattr(member.privileges, "can_pin_messages", False) if hasattr(member, "privileges") else False,
+                            "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if hasattr(member, "privileges") else False,
+                        }
+                        
+                        ok = await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
+                        if ok:
+                            saved += 1
+                    else:
+                        # Not admin, remove from admin groups
+                        await remove_admin_group(chat_id)
+                        removed += 1
+
+                except Exception as e:
+                    errors += 1
+                    print(f"Error checking admin status for {chat_id}: {e}")
+
+            # Remove groups that are no longer in dialogs
+            try:
+                existing_groups = list(admin_groups_col.find({}, {"chat_id": 1}))
+                for group in existing_groups:
+                    if group["chat_id"] not in current_group_ids:
+                        admin_groups_col.delete_one({"chat_id": group["chat_id"]})
+                        removed += 1
+            except Exception:
+                pass
+
+        except Exception as e:
+            errors += 1
+            print(f"Error refreshing admin groups: {e}")
+
+        return {"total_seen": total_seen, "saved": saved, "removed": removed, "errors": errors}
+
     # Track users on /start
     @bot_client.on_message(filters.command("start") & filters.private, group=-100)
     async def track_user_broadcast(client, message):
@@ -6046,6 +6161,48 @@ def get_accounts():
         "accounts": [name for name, _ in user_clients],
         "expected_speed": f"{len(user_clients) * 30}/min"
     })
+
+
+@flask_app.route("/admin-groups")
+def get_admin_groups():
+    """Get all groups where bot is admin"""
+    try:
+        if admin_groups_col is None:
+            return jsonify({"error": "Database not connected", "groups": []})
+        
+        groups = list(admin_groups_col.find({}).sort("updated_at", -1))
+        
+        # Convert ObjectId to string for JSON serialization
+        for group in groups:
+            group["_id"] = str(group["_id"])
+            if "updated_at" in group:
+                group["updated_at"] = group["updated_at"].isoformat() if group["updated_at"] else None
+        
+        return jsonify({
+            "count": len(groups),
+            "groups": groups
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "groups": []})
+
+
+@flask_app.route("/refresh-admin-groups", methods=["POST"])
+def trigger_refresh_admin_groups():
+    """Trigger refresh of admin groups list"""
+    try:
+        # Run async function in the event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def do_refresh():
+            return await refresh_admin_groups()
+        
+        result = loop.run_until_complete(do_refresh())
+        loop.close()
+        
+        return jsonify({"success": True, "result": result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 def run_flask():
