@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, Users, Shield, Crown, Trash2, Ban, Pin, UserPlus, Settings, MessageSquare } from "lucide-react";
+import { RefreshCw, Users, Shield, Crown, Trash2, Ban, Pin, UserPlus, Settings, MessageSquare, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 interface AdminGroup {
@@ -11,6 +11,8 @@ interface AdminGroup {
   chat_title: string;
   chat_type: string;
   member_count: number;
+  username?: string | null;
+  invite_link?: string | null;
   permissions: {
     is_owner: boolean;
     can_delete_messages: boolean;
@@ -159,7 +161,24 @@ export function AdminGroups({ botApiUrl = "" }: AdminGroupsProps) {
                   <div>
                     <h4 className="font-medium flex items-center gap-2">
                       <MessageSquare className="h-4 w-4 text-primary" />
-                      {group.chat_title}
+                      {(() => {
+                        const username = (group.username || "").replace(/^@/, "");
+                        const link = (group.invite_link || "").trim() || (username ? `https://t.me/${username}` : "");
+                        return link ? (
+                          <a
+                            href={link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 hover:underline"
+                            title="Open group"
+                          >
+                            {group.chat_title}
+                            <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+                          </a>
+                        ) : (
+                          <span>{group.chat_title}</span>
+                        );
+                      })()}
                     </h4>
                     <p className="text-sm text-muted-foreground">
                       ID: {group.chat_id}
