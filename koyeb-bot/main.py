@@ -1551,7 +1551,7 @@ def register_bot_handlers():
                 # Notes:
                 # - https://t.me/c/<id> is NOT a reliable "open group" link (usually needs message id).
                 # - For private groups without username, the only clickable join link is an invite link.
-                # - Bots can export invite links ONLY if they have the proper admin right.
+                # - Bots can create/export invite links ONLY if they have the proper admin right.
                 invite_link = (g.get("invite_link") or "").strip()
                 username = (g.get("username") or "").strip().lstrip("@")
 
@@ -1561,47 +1561,16 @@ def register_bot_handlers():
                 except Exception:
                     chat_id = None
 
-                # If we don't have a link saved, try to fetch/generate it on demand.
+                # If we don't have a link saved, try to fetch/generate it on demand using the shared helper.
                 if (not invite_link and not username) and chat_id is not None:
                     try:
-                        chat = await bot_client.get_chat(chat_id)
-                        username = (getattr(chat, "username", "") or "").strip().lstrip("@")
-                        invite_link = (getattr(chat, "invite_link", "") or "").strip()
-                    except Exception:
-                        pass
-
-                if (not invite_link and not username) and chat_id is not None:
-                    try:
-                        # This will fail if bot lacks "Invite users" permission.
-                        invite_link = (await bot_client.export_chat_invite_link(chat_id)).strip()
+                        username, invite_link = await _get_best_join_link(chat_id)
                         if admin_groups_col is not None:
                             admin_groups_col.update_one(
                                 {"chat_id": chat_id},
-                                {"$set": {"invite_link": invite_link}},
+                                {"$set": {"username": username or None, "invite_link": invite_link or None, "updated_at": datetime.utcnow()}},
                                 upsert=True,
                             )
-                    except (ChatAdminRequired, Forbidden):
-                        pass
-                    except Exception:
-                        pass
-
-                # For groups still without invite_link or username, try creating invite link via Bot API
-                if (not invite_link and not username) and chat_id is not None:
-                    try:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as sess:
-                            api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/exportChatInviteLink"
-                            async with sess.post(api_url, json={"chat_id": chat_id}) as resp:
-                                if resp.status == 200:
-                                    result = await resp.json()
-                                    if result.get("ok") and result.get("result"):
-                                        invite_link = result["result"]
-                                        if admin_groups_col is not None:
-                                            admin_groups_col.update_one(
-                                                {"chat_id": chat_id},
-                                                {"$set": {"invite_link": invite_link}},
-                                                upsert=True,
-                                            )
                     except Exception:
                         pass
 
@@ -6135,12 +6104,11 @@ def register_bot_handlers():
             import aiohttp
 
             base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                 me = await bot_client.get_me()
                 async with session.get(
                     f"{base_url}/getChatMember",
                     params={"chat_id": str(chat_id), "user_id": str(me.id)},
-                    timeout=aiohttp.ClientTimeout(total=15),
                 ) as r:
                     data = await r.json()
             if not isinstance(data, dict) or not data.get("ok"):
@@ -6149,6 +6117,35 @@ def register_bot_handlers():
             return status in {"administrator", "creator"}
         except Exception:
             return False
+
+    async def bot_api_can_invite_users(chat_id: int) -> bool | None:
+        """Return can_invite_users for the bot in a chat via Bot API.
+
+        Returns:
+          - True/False when available
+          - None when it can't be determined (e.g. token missing / API error)
+        """
+        try:
+            if not BOT_TOKEN:
+                return None
+            import aiohttp
+
+            base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+                me = await bot_client.get_me()
+                async with session.get(
+                    f"{base_url}/getChatMember",
+                    params={"chat_id": str(chat_id), "user_id": str(me.id)},
+                ) as r:
+                    data = await r.json()
+            if not isinstance(data, dict) or not data.get("ok"):
+                return None
+            result = data.get("result") or {}
+            # For administrators, Telegram returns granular rights like can_invite_users.
+            val = result.get("can_invite_users")
+            return bool(val) if val is not None else None
+        except Exception:
+            return None
 
     async def save_group_for_broadcast(chat_id: int, chat_title: str = None):
         """Save group to broadcast list (only if bot is admin)"""
@@ -6502,8 +6499,18 @@ def register_bot_handlers():
 
         chat = chat_obj
         if chat is None:
+            # Some clients/hosts can throw PeerIdInvalid if the peer isn't cached yet.
             try:
                 chat = await bot_client.get_chat(chat_id)
+            except PeerIdInvalid:
+                try:
+                    await bot_client.get_chat(chat_id)  # try again to force-resolve/cache
+                except Exception:
+                    pass
+                try:
+                    chat = await bot_client.get_chat(chat_id)
+                except Exception:
+                    chat = None
             except Exception:
                 chat = None
 
@@ -6524,11 +6531,15 @@ def register_bot_handlers():
         except Exception as e:
             print(f"⚠️ export_chat_invite_link failed for {chat_id}: {type(e).__name__}: {e}")
 
-        # Bot API fallback: createChatInviteLink
+        # Bot API fallback: createChatInviteLink (more reliable across chat types)
+        if not BOT_TOKEN:
+            print("⚠️ BOT_TOKEN missing; cannot create invite links via Bot API")
+            return "", ""
+
         try:
             import aiohttp
 
-            async with aiohttp.ClientSession() as sess:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
                 api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/createChatInviteLink"
                 async with sess.post(api_url, json={"chat_id": chat_id}) as resp:
                     data = await resp.json()
@@ -6536,6 +6547,8 @@ def register_bot_handlers():
                         link = (data["result"].get("invite_link") or "").strip()
                         if link:
                             return "", link
+                    else:
+                        print(f"⚠️ createChatInviteLink API error for {chat_id}: {data}")
         except Exception as e:
             print(f"⚠️ createChatInviteLink failed for {chat_id}: {type(e).__name__}: {e}")
 
@@ -6567,18 +6580,43 @@ def register_bot_handlers():
 
                 try:
                     bot_me = await bot_client.get_me()
-                    member = await bot_client.get_chat_member(chat_id, bot_me.id)
 
-                    if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                    member = None
+                    try:
+                        member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                    except PeerIdInvalid:
+                        # Try to resolve/cache peer and retry once
+                        try:
+                            await bot_client.get_chat(chat_id)
+                        except Exception:
+                            pass
+                        try:
+                            member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                        except PeerIdInvalid:
+                            member = None
+
+                    is_admin = False
+                    if member is not None:
+                        is_admin = member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+                    else:
+                        # Final fallback: raw Bot API (doesn't depend on peer cache)
+                        is_admin = await bot_api_is_admin(chat_id)
+
+                    if is_admin:
+                        can_invite_fallback = await bot_api_can_invite_users(chat_id)
                         permissions = {
-                            "is_owner": member.status == ChatMemberStatus.OWNER,
-                            "can_delete_messages": getattr(member.privileges, "can_delete_messages", False) if hasattr(member, "privileges") else False,
-                            "can_restrict_members": getattr(member.privileges, "can_restrict_members", False) if hasattr(member, "privileges") else False,
-                            "can_promote_members": getattr(member.privileges, "can_promote_members", False) if hasattr(member, "privileges") else False,
-                            "can_change_info": getattr(member.privileges, "can_change_info", False) if hasattr(member, "privileges") else False,
-                            "can_invite_users": getattr(member.privileges, "can_invite_users", False) if hasattr(member, "privileges") else False,
-                            "can_pin_messages": getattr(member.privileges, "can_pin_messages", False) if hasattr(member, "privileges") else False,
-                            "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if hasattr(member, "privileges") else False,
+                            "is_owner": (member.status == ChatMemberStatus.OWNER) if member is not None else False,
+                            "can_delete_messages": getattr(member.privileges, "can_delete_messages", False) if (member is not None and hasattr(member, "privileges")) else False,
+                            "can_restrict_members": getattr(member.privileges, "can_restrict_members", False) if (member is not None and hasattr(member, "privileges")) else False,
+                            "can_promote_members": getattr(member.privileges, "can_promote_members", False) if (member is not None and hasattr(member, "privileges")) else False,
+                            "can_change_info": getattr(member.privileges, "can_change_info", False) if (member is not None and hasattr(member, "privileges")) else False,
+                            "can_invite_users": (
+                                getattr(member.privileges, "can_invite_users", False)
+                                if (member is not None and hasattr(member, "privileges"))
+                                else bool(can_invite_fallback) if can_invite_fallback is not None else False
+                            ),
+                            "can_pin_messages": getattr(member.privileges, "can_pin_messages", False) if (member is not None and hasattr(member, "privileges")) else False,
+                            "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if (member is not None and hasattr(member, "privileges")) else False,
                         }
 
                         ok = await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
