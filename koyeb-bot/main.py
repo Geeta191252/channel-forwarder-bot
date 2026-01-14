@@ -6102,6 +6102,30 @@ def register_bot_handlers():
         except Exception as e:
             print(f"Error saving user for broadcast: {e}")
 
+    async def bot_api_is_admin(chat_id: int) -> bool:
+        """Fallback admin check via raw Bot API.
+        Helps when Pyrogram raises PeerIdInvalid due to missing peer cache."""
+        try:
+            if not BOT_TOKEN:
+                return False
+            import aiohttp
+
+            base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+            async with aiohttp.ClientSession() as session:
+                me = await bot_client.get_me()
+                async with session.get(
+                    f"{base_url}/getChatMember",
+                    params={"chat_id": str(chat_id), "user_id": str(me.id)},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as r:
+                    data = await r.json()
+            if not isinstance(data, dict) or not data.get("ok"):
+                return False
+            status = ((data.get("result") or {}).get("status") or "").lower()
+            return status in {"administrator", "creator"}
+        except Exception:
+            return False
+
     async def save_group_for_broadcast(chat_id: int, chat_title: str = None):
         """Save group to broadcast list (only if bot is admin)"""
         if broadcast_groups_col is None:
@@ -6116,13 +6140,24 @@ def register_bot_handlers():
                 try:
                     member = await bot_client.get_chat_member(chat_id, bot_me.id)
                 except PeerIdInvalid:
-                    await bot_client.get_chat(chat_id)  # resolve/cache peer
-                    member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                    try:
+                        await bot_client.get_chat(chat_id)  # resolve/cache peer
+                    except Exception:
+                        pass
+                    try:
+                        member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                    except PeerIdInvalid:
+                        # Final fallback: raw Bot API (doesn't depend on local peer cache)
+                        if not await bot_api_is_admin(chat_id):
+                            return False
+                        member = None
 
-                if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                if member is not None and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                     return False  # Not admin, don't save
             except Exception:
-                return False
+                # If pyrogram path fails, try raw Bot API before giving up
+                if not await bot_api_is_admin(chat_id):
+                    return False
 
             broadcast_groups_col.update_one(
                 {"chat_id": chat_id},
@@ -6249,6 +6284,21 @@ def register_bot_handlers():
 
                 try:
                     ok = await save_group_for_broadcast(chat_id, chat_title)
+
+                    # If Pyrogram couldn't verify admin due to peer-cache issues,
+                    # fallback to raw Bot API so we still store the group.
+                    if not ok:
+                        if await bot_api_is_admin(chat_id):
+                            try:
+                                broadcast_groups_col.update_one(
+                                    {"chat_id": chat_id},
+                                    {"$set": {"chat_id": chat_id, "chat_title": chat_title, "updated_at": datetime.utcnow()}},
+                                    upsert=True,
+                                )
+                                ok = True
+                            except Exception:
+                                ok = False
+
                     if ok:
                         saved += 1
                         # Also save to admin_groups_col with permissions (for /admingroups)
@@ -6257,8 +6307,12 @@ def register_bot_handlers():
                             try:
                                 member = await bot_client.get_chat_member(chat_id, bot_me.id)
                             except PeerIdInvalid:
-                                await bot_client.get_chat(chat_id)
+                                try:
+                                    await bot_client.get_chat(chat_id)
+                                except Exception:
+                                    pass
                                 member = await bot_client.get_chat_member(chat_id, bot_me.id)
+
                             if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                                 permissions = {
                                     "is_owner": member.status == ChatMemberStatus.OWNER,
@@ -6270,6 +6324,10 @@ def register_bot_handlers():
                                     "can_pin_messages": getattr(member.privileges, "can_pin_messages", False) if hasattr(member, "privileges") else False,
                                     "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if hasattr(member, "privileges") else False,
                                 }
+                            else:
+                                permissions = None
+
+                            if permissions is not None:
                                 await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
 
                                 # Store link info so /admingroups can show clickable links
@@ -6288,7 +6346,27 @@ def register_bot_handlers():
                                         {"$set": {"invite_link": invite_link, "username": username}},
                                     )
                         except Exception:
-                            pass
+                            # As a last resort, still list the group in /admingroups (without permissions)
+                            try:
+                                if admin_groups_col is not None:
+                                    await save_admin_group(
+                                        chat_id,
+                                        chat_title,
+                                        chat_type,
+                                        member_count,
+                                        {
+                                            "is_owner": False,
+                                            "can_delete_messages": False,
+                                            "can_restrict_members": False,
+                                            "can_promote_members": False,
+                                            "can_change_info": False,
+                                            "can_invite_users": False,
+                                            "can_pin_messages": False,
+                                            "can_manage_chat": False,
+                                        },
+                                    )
+                            except Exception:
+                                pass
                     else:
                         # If it's in DB but we are not admin anymore, remove it
                         try:
