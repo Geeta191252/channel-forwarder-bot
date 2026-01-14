@@ -1385,16 +1385,11 @@ def register_bot_handlers():
 
             await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
 
-            username = getattr(chat, "username", "") or ""
-            if username:
-                invite_link = f"https://t.me/{username}"
-            else:
-                chat_id_str = str(chat_id).replace("-100", "")
-                invite_link = f"https://t.me/c/{chat_id_str}"
+            username, invite_link = await _get_best_join_link(chat_id, chat_obj=chat)
 
             admin_groups_col.update_one(
                 {"chat_id": chat_id},
-                {"$set": {"invite_link": invite_link, "username": username}},
+                {"$set": {"invite_link": invite_link or None, "username": (username or None)}},
             )
 
             if broadcast_groups_col is not None:
@@ -6487,14 +6482,64 @@ def register_bot_handlers():
             print(f"Error getting admin groups: {e}")
             return []
 
+    async def _get_best_join_link(chat_id: int, chat_obj=None):
+        """Return (username, invite_link) for a chat.
+
+        For private groups without username, only an invite link is clickable.
+        Requires bot admin right: "Invite users".
+        """
+        username = ""
+        invite_link = ""
+
+        chat = chat_obj
+        if chat is None:
+            try:
+                chat = await bot_client.get_chat(chat_id)
+            except Exception:
+                chat = None
+
+        if chat is not None:
+            username = (getattr(chat, "username", "") or "").strip().lstrip("@")
+            if username:
+                return username, ""
+
+            invite_link = (getattr(chat, "invite_link", "") or "").strip()
+            if invite_link:
+                return "", invite_link
+
+        # Pyrogram export (works when bot can invite)
+        try:
+            invite_link = (await bot_client.export_chat_invite_link(chat_id)).strip()
+            if invite_link:
+                return "", invite_link
+        except Exception as e:
+            print(f"⚠️ export_chat_invite_link failed for {chat_id}: {type(e).__name__}: {e}")
+
+        # Bot API fallback: createChatInviteLink
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as sess:
+                api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/createChatInviteLink"
+                async with sess.post(api_url, json={"chat_id": chat_id}) as resp:
+                    data = await resp.json()
+                    if data.get("ok") and data.get("result"):
+                        link = (data["result"].get("invite_link") or "").strip()
+                        if link:
+                            return "", link
+        except Exception as e:
+            print(f"⚠️ createChatInviteLink failed for {chat_id}: {type(e).__name__}: {e}")
+
+        return "", ""
+
     async def refresh_admin_groups() -> dict:
-        """Scan all dialogs and update admin groups with permissions"""
+        """Scan all dialogs and update admin groups with permissions + join links"""
         if admin_groups_col is None:
             return {"total_seen": 0, "saved": 0, "removed": 0, "errors": 0}
 
         total_seen = saved = removed = errors = 0
         current_group_ids = set()
-        
+
         try:
             async for dialog in bot_client.get_dialogs():
                 chat = getattr(dialog, "chat", None)
@@ -6512,12 +6557,10 @@ def register_bot_handlers():
                 member_count = getattr(chat, "members_count", 0) or 0
 
                 try:
-                    # Check if bot is admin and get permissions
                     bot_me = await bot_client.get_me()
                     member = await bot_client.get_chat_member(chat_id, bot_me.id)
-                    
+
                     if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                        # Extract permissions
                         permissions = {
                             "is_owner": member.status == ChatMemberStatus.OWNER,
                             "can_delete_messages": getattr(member.privileges, "can_delete_messages", False) if hasattr(member, "privileges") else False,
@@ -6528,12 +6571,22 @@ def register_bot_handlers():
                             "can_pin_messages": getattr(member.privileges, "can_pin_messages", False) if hasattr(member, "privileges") else False,
                             "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if hasattr(member, "privileges") else False,
                         }
-                        
+
                         ok = await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
                         if ok:
                             saved += 1
+
+                        username, invite_link = await _get_best_join_link(chat_id, chat_obj=chat)
+                        try:
+                            admin_groups_col.update_one(
+                                {"chat_id": chat_id},
+                                {"$set": {"username": username or None, "invite_link": invite_link or None}},
+                                upsert=True,
+                            )
+                        except Exception:
+                            pass
+
                     else:
-                        # Not admin, remove from admin groups
                         await remove_admin_group(chat_id)
                         removed += 1
 
@@ -6545,8 +6598,8 @@ def register_bot_handlers():
             try:
                 existing_groups = list(admin_groups_col.find({}, {"chat_id": 1}))
                 for group in existing_groups:
-                    if group["chat_id"] not in current_group_ids:
-                        admin_groups_col.delete_one({"chat_id": group["chat_id"]})
+                    if group.get("chat_id") not in current_group_ids:
+                        admin_groups_col.delete_one({"chat_id": group.get("chat_id")})
                         removed += 1
             except Exception:
                 pass
