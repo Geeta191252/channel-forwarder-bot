@@ -450,33 +450,97 @@ def get_all_admin_groups():
     return []
 
 
+async def _get_best_join_link(client, chat_id_int: int, chat_obj=None):
+    """Return (username, invite_link) for a chat.
+
+    For private groups without username, we must generate an invite link.
+    """
+    username = None
+    invite_link = None
+
+    chat = chat_obj
+    if chat is None:
+        try:
+            chat = await client.get_chat(chat_id_int)
+        except Exception:
+            chat = None
+
+    if chat is not None:
+        username = getattr(chat, "username", None)
+        if username:
+            return username, None
+        invite_link = getattr(chat, "invite_link", None)
+
+    # If it's private and no invite_link known, try to generate one.
+    if not invite_link:
+        try:
+            invite_link = await client.export_chat_invite_link(chat_id_int)
+            return username, invite_link
+        except Exception as e:
+            print(f"⚠️ export_chat_invite_link failed for {chat_id_int}: {type(e).__name__}: {e}", flush=True)
+
+    if not invite_link:
+        try:
+            created = await client.create_chat_invite_link(chat_id_int)
+            invite_link = getattr(created, "invite_link", None)
+            if invite_link:
+                return username, invite_link
+        except Exception as e:
+            print(f"⚠️ create_chat_invite_link failed for {chat_id_int}: {type(e).__name__}: {e}", flush=True)
+
+    # Final fallback: raw Bot API createChatInviteLink (works for private groups if bot can invite).
+    if not invite_link:
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as sess:
+                api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/createChatInviteLink"
+                async with sess.post(api_url, json={"chat_id": chat_id_int}) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        if result.get("ok") and result.get("result"):
+                            invite_link = result["result"].get("invite_link")
+                            if invite_link:
+                                return username, invite_link
+                    else:
+                        try:
+                            err = await resp.text()
+                        except Exception:
+                            err = ""
+                        print(f"⚠️ Bot API createChatInviteLink HTTP {resp.status} for {chat_id_int}: {err}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Bot API createChatInviteLink failed for {chat_id_int}: {type(e).__name__}: {e}", flush=True)
+
+    return username, invite_link
+
+
 async def refresh_admin_groups(client):
     """Refresh admin groups by verifying existing saved groups.
-    
+
     Bot accounts cannot enumerate dialogs, so we only verify
     groups already saved in the database (from on_chat_member_updated events).
     """
     print("🔄 Refreshing admin groups/channels...", flush=True)
-    
+
     # Get all saved groups and verify each one
     saved_groups = get_all_admin_groups()
     admin_count = 0
     removed_count = 0
     checked_count = 0
-    
+
     print(f"🔍 Found {len(saved_groups)} saved groups to verify", flush=True)
-    
+
     for group in saved_groups:
         chat_id = group.get("chat_id")
         if not chat_id:
             continue
-        
+
         checked_count += 1
         print(f"🔄 Checking chat: {chat_id} - {group.get('chat_title', 'Unknown')}", flush=True)
-        
+
         try:
             chat_id_int = int(chat_id)
-            
+
             # Get chat info
             try:
                 chat = await client.get_chat(chat_id_int)
@@ -486,7 +550,7 @@ async def refresh_admin_groups(client):
                 await remove_admin_group(chat_id_int)
                 removed_count += 1
                 continue
-            
+
             # Get bot member status
             try:
                 me = await client.get_chat_member(chat_id_int, "me")
@@ -496,7 +560,7 @@ async def refresh_admin_groups(client):
                 await remove_admin_group(chat_id_int)
                 removed_count += 1
                 continue
-            
+
             admin_statuses = [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
             if me.status in admin_statuses:
                 # Update info
@@ -511,33 +575,10 @@ async def refresh_admin_groups(client):
                         "can_pin_messages": getattr(me.privileges, "can_pin_messages", False),
                         "can_manage_chat": getattr(me.privileges, "can_manage_chat", False),
                     }
-                
+
                 member_count = getattr(chat, "members_count", None) or 0
-                username = getattr(chat, "username", None)
-                
-                # Get invite link for private chats
-                invite_link = None
-                if not username:
-                    # First try to get existing invite link from chat info
-                    invite_link = getattr(chat, "invite_link", None)
-                    print(f"📎 Existing invite_link from chat: {invite_link}", flush=True)
-                    
-                    # If no existing link, try to create one
-                    if not invite_link:
-                        try:
-                            invite_link = await client.export_chat_invite_link(chat_id_int)
-                            print(f"📎 Generated invite_link: {invite_link}", flush=True)
-                        except Exception as e:
-                            print(f"⚠️ Could not generate invite link for {chat.title}: {type(e).__name__}: {e}", flush=True)
-                            # Fallback to internal link format
-                            chat_id_str = str(abs(chat_id_int))
-                            if chat_id_str.startswith("100"):
-                                chat_id_str = chat_id_str[3:]
-                            invite_link = f"https://t.me/c/{chat_id_str}"
-                            print(f"📎 Using fallback link: {invite_link}", flush=True)
-                else:
-                    print(f"📎 Public username: @{username}", flush=True)
-                
+                username, invite_link = await _get_best_join_link(client, chat_id_int, chat_obj=chat)
+
                 await save_admin_group(
                     chat_id_int,
                     chat.title,
@@ -548,13 +589,13 @@ async def refresh_admin_groups(client):
                     invite_link,
                 )
                 admin_count += 1
-                print(f"✅ Verified: {chat.title}", flush=True)
+                print(f"✅ Verified: {chat.title} (link: {username or invite_link})", flush=True)
             else:
                 # No longer admin - remove
                 await remove_admin_group(chat_id_int)
                 removed_count += 1
                 print(f"➖ Removed {chat.title} - no longer admin (status: {me.status})", flush=True)
-                
+
         except (ChannelPrivate, Forbidden) as e:
             # Bot kicked or channel made private - remove
             await remove_admin_group(int(chat_id))
@@ -562,9 +603,11 @@ async def refresh_admin_groups(client):
             print(f"➖ Removed chat {chat_id} - access denied: {e}", flush=True)
         except Exception as e:
             print(f"⚠️ Error checking chat {chat_id}: {type(e).__name__}: {e}", flush=True)
-    
+
     print(f"✅ Done! Verified {admin_count}, removed {removed_count}, checked {checked_count}", flush=True)
     return {"verified": admin_count, "removed": removed_count, "checked": checked_count}
+
+
 
 
 async def auto_track_admin_group(client, chat):
@@ -584,28 +627,10 @@ async def auto_track_admin_group(client, chat):
                     "can_pin_messages": getattr(me.privileges, "can_pin_messages", False),
                     "can_manage_chat": getattr(me.privileges, "can_manage_chat", False),
                 }
-            
+
             member_count = getattr(chat, "members_count", None) or 0
-            username = getattr(chat, "username", None)
-            
-            # Get invite link for private chats
-            invite_link = None
-            if not username:
-                # First try to get existing invite link from chat info
-                invite_link = getattr(chat, "invite_link", None)
-                
-                # If no existing link, try to create one
-                if not invite_link:
-                    try:
-                        invite_link = await client.export_chat_invite_link(chat.id)
-                    except Exception as e:
-                        print(f"⚠️ Could not generate invite link for {chat.title}: {e}", flush=True)
-                        # Fallback to internal link format
-                        chat_id_str = str(abs(chat.id))
-                        if chat_id_str.startswith("100"):
-                            chat_id_str = chat_id_str[3:]
-                        invite_link = f"https://t.me/c/{chat_id_str}"
-            
+            username, invite_link = await _get_best_join_link(client, chat.id, chat_obj=chat)
+
             await save_admin_group(
                 chat.id,
                 chat.title,
@@ -648,8 +673,10 @@ def api_admin_groups():
             "chat_title": g.get("chat_title"),
             "chat_type": g.get("chat_type"),
             "member_count": g.get("member_count", 0),
+            "username": g.get("username"),
+            "invite_link": g.get("invite_link"),
             "permissions": g.get("permissions", {}),
-            "updated_at": str(g.get("updated_at", ""))
+            "updated_at": str(g.get("updated_at", "")),
         })
     return jsonify({"groups": result, "count": len(result)})
 
@@ -661,8 +688,15 @@ def api_refresh_admin_groups():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            count = loop.run_until_complete(refresh_admin_groups(bot_client))
-            return jsonify({"success": True, "count": count, "message": f"Found {count} admin groups"})
+            result = loop.run_until_complete(refresh_admin_groups(bot_client))
+            verified = int(result.get("verified", 0))
+            removed = int(result.get("removed", 0))
+            checked = int(result.get("checked", 0))
+            return jsonify({
+                "success": True,
+                "result": {"saved": verified, "removed": removed, "checked": checked},
+                "message": f"Verified {verified}, removed {removed}, checked {checked}",
+            })
         except Exception as e:
             return jsonify({"success": False, "error": str(e)}), 500
         finally:
