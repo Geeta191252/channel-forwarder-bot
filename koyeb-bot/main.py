@@ -1541,36 +1541,60 @@ def register_bot_handlers():
             msg_lines = ["👥 **Groups Where Bot is Admin:**\n"]
             for i, g in enumerate(groups[:20], 1):  # Limit to 20
                 title = g.get("chat_title", "Unknown")
-                chat_id = g.get("chat_id", "?")
+                chat_id_raw = g.get("chat_id", "?")
 
-                # Always try to show a clickable link.
-                # Priority: stored invite_link -> stored username -> internal t.me/c link.
+                # Try to produce a REAL joinable link.
+                # Notes:
+                # - https://t.me/c/<id> is NOT a reliable "open group" link (usually needs message id).
+                # - For private groups without username, the only clickable join link is an invite link.
+                # - Bots can export invite links ONLY if they have the proper admin right.
                 invite_link = (g.get("invite_link") or "").strip()
-                username = (g.get("username") or "").strip()
+                username = (g.get("username") or "").strip().lstrip("@")
 
-                link_url = ""
-                if invite_link:
-                    link_url = invite_link
-                elif username:
-                    link_url = f"https://t.me/{username[1:]}" if username.startswith("@") else f"https://t.me/{username}"
-                else:
+                chat_id: int | None = None
+                try:
+                    chat_id = int(chat_id_raw)
+                except Exception:
+                    chat_id = None
+
+                # If we don't have a link saved, try to fetch/generate it on demand.
+                if (not invite_link and not username) and chat_id is not None:
                     try:
-                        cid = int(chat_id)
-                        cid_str = str(cid).replace("-100", "").lstrip("-")
-                        link_url = f"https://t.me/c/{cid_str}"
+                        chat = await bot_client.get_chat(chat_id)
+                        username = (getattr(chat, "username", "") or "").strip().lstrip("@")
+                        invite_link = (getattr(chat, "invite_link", "") or "").strip()
                     except Exception:
-                        link_url = ""
+                        pass
+
+                if (not invite_link and not username) and chat_id is not None:
+                    try:
+                        # This will fail if bot lacks "Invite users" permission.
+                        invite_link = (await bot_client.export_chat_invite_link(chat_id)).strip()
+                        if admin_groups_col is not None:
+                            admin_groups_col.update_one(
+                                {"chat_id": chat_id},
+                                {"$set": {"invite_link": invite_link}},
+                                upsert=True,
+                            )
+                    except (ChatAdminRequired, Forbidden):
+                        pass
+                    except Exception:
+                        pass
+
+                link_url = invite_link or (f"https://t.me/{username}" if username else "")
 
                 if link_url:
-                    msg_lines.append(f"{i}. [{title}]({link_url})\n   ID: `{chat_id}`")
+                    msg_lines.append(f"{i}. [{title}]({link_url})\n   ID: `{chat_id_raw}`")
                 else:
-                    msg_lines.append(f"{i}. {title}\n   ID: `{chat_id}`")
-            
+                    msg_lines.append(
+                        f"{i}. {title}\n   ID: `{chat_id_raw}`\n   ⚠️ Link unavailable (private group + no username). Give bot 'Invite users' admin right, then run /admingroups again."
+                    )
+
             if len(groups) > 20:
                 msg_lines.append(f"\n... and {len(groups) - 20} more")
-            
+
             msg_lines.append(f"\n📊 **Total:** {len(groups)} groups")
-            
+
             await message.reply(
                 "\n".join(msg_lines),
                 disable_web_page_preview=True
