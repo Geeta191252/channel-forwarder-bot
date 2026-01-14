@@ -48,8 +48,24 @@ function normalizeBotApiUrl(raw: string) {
   return (raw || "").trim().replace(/\/+$/, "");
 }
 
+function normalizeTelegramLink(raw: string): string {
+  const v = (raw || "").trim();
+  if (!v) return "";
+
+  // Most reliable for opening Telegram from web/mobile.
+  if (/^https?:\/\//i.test(v)) return v;
+
+  // Sometimes APIs/store return "t.me/..." without scheme.
+  if (/^(t\.me|telegram\.me)\//i.test(v)) return `https://${v}`;
+
+  // Rare: stored as "@username".
+  if (v.startsWith("@")) return `https://t.me/${v.slice(1)}`;
+
+  return v;
+}
+
 function getGroupLink(group: AdminGroup): string {
-  const invite = (group.invite_link || "").trim();
+  const invite = normalizeTelegramLink(group.invite_link || "");
   if (invite) return invite;
 
   const username = (group.username || "").trim().replace(/^@/, "");
