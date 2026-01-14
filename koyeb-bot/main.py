@@ -1581,13 +1581,33 @@ def register_bot_handlers():
                     except Exception:
                         pass
 
+                # For groups still without invite_link or username, try creating invite link via Bot API
+                if (not invite_link and not username) and chat_id is not None:
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as sess:
+                            api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/exportChatInviteLink"
+                            async with sess.post(api_url, json={"chat_id": chat_id}) as resp:
+                                if resp.status == 200:
+                                    result = await resp.json()
+                                    if result.get("ok") and result.get("result"):
+                                        invite_link = result["result"]
+                                        if admin_groups_col is not None:
+                                            admin_groups_col.update_one(
+                                                {"chat_id": chat_id},
+                                                {"$set": {"invite_link": invite_link}},
+                                                upsert=True,
+                                            )
+                    except Exception:
+                        pass
+
                 link_url = invite_link or (f"https://t.me/{username}" if username else "")
 
                 if link_url:
                     msg_lines.append(f"{i}. [{title}]({link_url})\n   ID: `{chat_id_raw}`")
                 else:
                     msg_lines.append(
-                        f"{i}. {title}\n   ID: `{chat_id_raw}`\n   ⚠️ Link unavailable (private group + no username). Give bot 'Invite users' admin right, then run /admingroups again."
+                        f"{i}. {title}\n   ID: `{chat_id_raw}`\n   ⚠️ No link (private). Bot needs 'Invite Users' permission."
                     )
 
             if len(groups) > 20:
