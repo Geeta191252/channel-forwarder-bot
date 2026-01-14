@@ -50,6 +50,15 @@ flask_app = Flask(__name__)
 # Alias for WSGI servers like gunicorn (some platforms expect `app`)
 app = flask_app
 
+# CORS: allow the web dashboard to call this API from a different domain
+@flask_app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
+
 # MongoDB setup
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or ""
 mongo_client = MongoClient(MONGO_URI) if MONGO_URI else None
@@ -6893,16 +6902,79 @@ def trigger_refresh_admin_groups():
         # Run async function in the event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
+
         async def do_refresh():
             return await refresh_admin_groups()
-        
+
         result = loop.run_until_complete(do_refresh())
         loop.close()
-        
+
         return jsonify({"success": True, "result": result})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+
+@flask_app.route("/generate-invite-link", methods=["POST"])
+def generate_invite_link():
+    """Generate (or fetch) a clickable join link for a specific group.
+
+    Notes:
+    - For private groups, Telegram only provides clickable access via invite link.
+    - This requires the bot admin right: "Invite users".
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        chat_id_raw = payload.get("chat_id")
+        try:
+            chat_id = int(chat_id_raw)
+        except Exception:
+            chat_id = 0
+
+        if not chat_id:
+            return jsonify({"success": False, "error": "chat_id is required"}), 400
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def do_generate():
+            username, invite_link = await _get_best_join_link(chat_id)
+
+            # Also report current permission (helps UI explain why link is missing)
+            can_invite = None
+            try:
+                bot_me = await bot_client.get_me()
+                member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                can_invite = bool(getattr(getattr(member, "privileges", None), "can_invite_users", False))
+            except Exception:
+                pass
+
+            # Persist so the dashboard can show it immediately
+            if admin_groups_col is not None:
+                try:
+                    admin_groups_col.update_one(
+                        {"chat_id": chat_id},
+                        {"$set": {"username": username or None, "invite_link": invite_link or None, "updated_at": datetime.utcnow()}},
+                        upsert=True,
+                    )
+                except Exception:
+                    pass
+
+            link = invite_link or (f"https://t.me/{username}" if username else "")
+            return {
+                "username": username or None,
+                "invite_link": invite_link or None,
+                "link": link or None,
+                "can_invite_users": can_invite,
+                "success": bool(link),
+            }
+
+        result = loop.run_until_complete(do_generate())
+        loop.close()
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
 
 
 def run_flask():
