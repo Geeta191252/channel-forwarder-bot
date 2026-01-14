@@ -6110,7 +6110,15 @@ def register_bot_handlers():
             # Check if bot is admin in this group
             try:
                 bot_me = await bot_client.get_me()
-                member = await bot_client.get_chat_member(chat_id, bot_me.id)
+
+                # Some hosts/clients can throw PeerIdInvalid even for valid -100... ids
+                # if the peer isn't cached yet. Force-resolve once and retry.
+                try:
+                    member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                except PeerIdInvalid:
+                    await bot_client.get_chat(chat_id)  # resolve/cache peer
+                    member = await bot_client.get_chat_member(chat_id, bot_me.id)
+
                 if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                     return False  # Not admin, don't save
             except Exception:
@@ -6246,7 +6254,11 @@ def register_bot_handlers():
                         # Also save to admin_groups_col with permissions (for /admingroups)
                         try:
                             bot_me = await bot_client.get_me()
-                            member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                            try:
+                                member = await bot_client.get_chat_member(chat_id, bot_me.id)
+                            except PeerIdInvalid:
+                                await bot_client.get_chat(chat_id)
+                                member = await bot_client.get_chat_member(chat_id, bot_me.id)
                             if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                                 permissions = {
                                     "is_owner": member.status == ChatMemberStatus.OWNER,
