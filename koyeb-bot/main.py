@@ -1564,13 +1564,22 @@ def register_bot_handlers():
                 invite_link = (g.get("invite_link") or "").strip()
                 username = (g.get("username") or "").strip().lstrip("@")
 
+                def _looks_like_internal_link(link: str) -> bool:
+                    l = (link or "").strip().lower()
+                    # t.me/c/<id> is NOT a join link for private groups; it usually needs a message-id.
+                    return "t.me/c/" in l or "telegram.me/c/" in l
+
+                # If DB has an internal/non-joinable link, treat it as missing so we regenerate a real invite.
+                if invite_link and _looks_like_internal_link(invite_link):
+                    invite_link = ""
+
                 chat_id: int | None = None
                 try:
                     chat_id = int(chat_id_raw)
                 except Exception:
                     chat_id = None
 
-                # If we don't have a link saved, try to fetch/generate it on demand using the shared helper.
+                # If we don't have a REAL link saved, try to fetch/generate it on demand using the shared helper.
                 if (not invite_link and not username) and chat_id is not None:
                     try:
                         username, invite_link = await _get_best_join_link(chat_id)
