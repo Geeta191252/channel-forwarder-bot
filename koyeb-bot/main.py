@@ -1588,11 +1588,11 @@ def register_bot_handlers():
 
             msg_lines.append(f"\n📊 **Total:** {len(groups)} groups")
 
-             await message.reply(
-                 "\n".join(msg_lines),
-                 disable_web_page_preview=True,
-                 parse_mode="markdown",
-             )
+            await message.reply(
+                "\n".join(msg_lines),
+                disable_web_page_preview=True,
+                parse_mode="markdown",
+            )
             message.stop_propagation()
             return
 
