@@ -1588,10 +1588,11 @@ def register_bot_handlers():
 
             msg_lines.append(f"\n📊 **Total:** {len(groups)} groups")
 
-            await message.reply(
-                "\n".join(msg_lines),
-                disable_web_page_preview=True
-            )
+             await message.reply(
+                 "\n".join(msg_lines),
+                 disable_web_page_preview=True,
+                 parse_mode="markdown",
+             )
             message.stop_propagation()
             return
 
@@ -6531,7 +6532,8 @@ def register_bot_handlers():
         except Exception as e:
             print(f"⚠️ export_chat_invite_link failed for {chat_id}: {type(e).__name__}: {e}")
 
-        # Bot API fallback: createChatInviteLink (more reliable across chat types)
+        # Bot API fallback: first try exportChatInviteLink (primary link), then createChatInviteLink (additional link).
+        # Some chats/settings may allow export but not creation.
         if not BOT_TOKEN:
             print("⚠️ BOT_TOKEN missing; cannot create invite links via Bot API")
             return "", ""
@@ -6540,8 +6542,20 @@ def register_bot_handlers():
             import aiohttp
 
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
-                api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/createChatInviteLink"
-                async with sess.post(api_url, json={"chat_id": chat_id}) as resp:
+                base = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+                # 1) exportChatInviteLink
+                async with sess.post(f"{base}/exportChatInviteLink", json={"chat_id": str(chat_id)}) as resp:
+                    data = await resp.json()
+                    if data.get("ok") and data.get("result"):
+                        link = (data.get("result") or "").strip()
+                        if link:
+                            return "", link
+                    else:
+                        print(f"⚠️ exportChatInviteLink API error for {chat_id}: {data}")
+
+                # 2) createChatInviteLink
+                async with sess.post(f"{base}/createChatInviteLink", json={"chat_id": str(chat_id)}) as resp:
                     data = await resp.json()
                     if data.get("ok") and data.get("result"):
                         link = (data["result"].get("invite_link") or "").strip()
@@ -6550,7 +6564,7 @@ def register_bot_handlers():
                     else:
                         print(f"⚠️ createChatInviteLink API error for {chat_id}: {data}")
         except Exception as e:
-            print(f"⚠️ createChatInviteLink failed for {chat_id}: {type(e).__name__}: {e}")
+            print(f"⚠️ Bot API invite-link fallback failed for {chat_id}: {type(e).__name__}: {e}")
 
         return "", ""
 
