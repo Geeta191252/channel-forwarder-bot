@@ -1542,9 +1542,14 @@ def register_bot_handlers():
                 message.stop_propagation()
                 return
             
-            msg_lines = ["👥 **Groups Where Bot is Admin:**\n"]
+            def _escape_html(s: str) -> str:
+                import html
+                return html.escape(s or "", quote=True)
+
+            msg_lines = ["👥 <b>Groups Where Bot is Admin:</b>\n"]
             for i, g in enumerate(groups[:20], 1):  # Limit to 20
-                title = g.get("chat_title", "Unknown")
+                title_raw = g.get("chat_title", "Unknown")
+                title = _escape_html(str(title_raw))
                 chat_id_raw = g.get("chat_id", "?")
 
                 # Try to produce a REAL joinable link.
@@ -1575,24 +1580,31 @@ def register_bot_handlers():
                         pass
 
                 link_url = invite_link or (f"https://t.me/{username}" if username else "")
+                link_url_esc = _escape_html(link_url)
 
                 if link_url:
-                    msg_lines.append(f"{i}. [{title}]({link_url})\n   ID: `{chat_id_raw}`")
+                    msg_lines.append(f"{i}. <a href=\"{link_url_esc}\">{title}</a>\n   ID: <code>{_escape_html(str(chat_id_raw))}</code>")
                 else:
                     msg_lines.append(
-                        f"{i}. {title}\n   ID: `{chat_id_raw}`\n   ⚠️ No link (private). Bot needs 'Invite Users' permission."
+                        f"{i}. {title}\n   ID: <code>{_escape_html(str(chat_id_raw))}</code>\n   ⚠️ No link (private). Bot needs 'Invite Users' permission."
                     )
 
             if len(groups) > 20:
                 msg_lines.append(f"\n... and {len(groups) - 20} more")
 
-            msg_lines.append(f"\n📊 **Total:** {len(groups)} groups")
+            msg_lines.append(f"\n📊 <b>Total:</b> {len(groups)} groups")
 
-            await message.reply(
-                "\n".join(msg_lines),
-                disable_web_page_preview=True,
-                parse_mode="markdown",
-            )
+            try:
+                await message.reply(
+                    "\n".join(msg_lines),
+                    disable_web_page_preview=True,
+                    parse_mode="html",
+                )
+            except Exception as e:
+                # Fallback: plain text (in case HTML parsing fails)
+                plain = "\n".join([line.replace("<b>", "").replace("</b>", "").replace("<code>", "`").replace("</code>", "`") for line in msg_lines])
+                await message.reply(f"{plain}\n\n(⚠️ render fallback: {type(e).__name__})")
+
             message.stop_propagation()
             return
 
