@@ -1583,14 +1583,28 @@ def register_bot_handlers():
                     except Exception:
                         pass
 
+                # Normalize link so Telegram surely treats it as clickable
                 link_url = invite_link or (f"https://t.me/{username}" if username else "")
+                if link_url and not link_url.startswith(("http://", "https://")):
+                    if link_url.startswith("t.me/") or link_url.startswith("telegram.me/"):
+                        link_url = f"https://{link_url}"
+                    elif link_url.startswith("+"):
+                        link_url = f"https://t.me/{link_url}"
+
                 link_url_esc = _escape_html(link_url)
 
                 if link_url:
-                    msg_lines.append(f"{i}. <a href=\"{link_url_esc}\">{title}</a>\n   ID: <code>{_escape_html(str(chat_id_raw))}</code>")
+                    # Title + explicit URL on next line (most reliable click behavior in Telegram)
+                    msg_lines.append(
+                        f"{i}. <b>{title}</b>\n"
+                        f"   🔗 <a href=\"{link_url_esc}\">{link_url_esc}</a>\n"
+                        f"   ID: <code>{_escape_html(str(chat_id_raw))}</code>"
+                    )
                 else:
                     msg_lines.append(
-                        f"{i}. {title}\n   ID: <code>{_escape_html(str(chat_id_raw))}</code>\n   ⚠️ No link (private). Bot needs 'Invite Users' permission."
+                        f"{i}. <b>{title}</b>\n"
+                        f"   ID: <code>{_escape_html(str(chat_id_raw))}</code>\n"
+                        "   ⚠️ No link (private). Bot needs 'Invite Users' permission."
                     )
 
             if len(groups) > 20:
