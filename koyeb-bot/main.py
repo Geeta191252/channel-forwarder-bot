@@ -1318,23 +1318,31 @@ def register_bot_handlers():
 
     # ============ ADMIN GROUPS HELPER FUNCTIONS ============
     
-    async def save_admin_group(chat_id: int, chat_title: str, chat_type: str, member_count: int, permissions: dict):
-        """Save group where bot is admin with full permissions info"""
+    async def save_admin_group(chat_id: int, chat_title: str, chat_type: str, member_count: int, permissions: dict, username: str = None, invite_link: str = None):
+        """Save group where bot is admin with full permissions info + invite link"""
         if admin_groups_col is None:
+            print(f"❌ save_admin_group: admin_groups_col is None")
             return False
         try:
+            doc = {
+                "chat_id": chat_id,
+                "chat_title": chat_title,
+                "chat_type": chat_type,
+                "member_count": member_count,
+                "permissions": permissions,
+                "updated_at": datetime.utcnow()
+            }
+            if username:
+                doc["username"] = username
+            if invite_link:
+                doc["invite_link"] = invite_link
+            
             admin_groups_col.update_one(
                 {"chat_id": chat_id},
-                {"$set": {
-                    "chat_id": chat_id,
-                    "chat_title": chat_title,
-                    "chat_type": chat_type,
-                    "member_count": member_count,
-                    "permissions": permissions,
-                    "updated_at": datetime.utcnow()
-                }},
+                {"$set": doc},
                 upsert=True
             )
+            print(f"✅ Saved admin group: {chat_title} (link: {invite_link or username or 'none'})")
             return True
         except Exception as e:
             print(f"Error saving admin group: {e}")
@@ -1392,14 +1400,10 @@ def register_bot_handlers():
                 "can_manage_chat": getattr(new_member.privileges, "can_manage_chat", False) if hasattr(new_member, "privileges") else False,
             }
 
-            await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
-
             username, invite_link = await _get_best_join_link(chat_id, chat_obj=chat)
-
-            admin_groups_col.update_one(
-                {"chat_id": chat_id},
-                {"$set": {"invite_link": invite_link or None, "username": (username or None)}},
-            )
+            print(f"🔗 _auto_track_admin_groups: {chat_title} | username={username} | link={invite_link}")
+            
+            await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions, username=username, invite_link=invite_link)
 
             if broadcast_groups_col is not None:
                 broadcast_groups_col.update_one(
@@ -1696,18 +1700,9 @@ def register_bot_handlers():
                 except Exception:
                     pass
                 
-                # Save to database
-                await save_admin_group(chat_id, chat_title, chat_type, member_count, perms)
-                
-                # Update with link
-                if admin_groups_col is not None:
-                    admin_groups_col.update_one(
-                        {"chat_id": chat_id},
-                        {"$set": {
-                            "invite_link": invite_link,
-                            "username": username
-                        }}
-                    )
+                # Save to database with link included
+                print(f"🔗 /addgroup: {chat_title} | username={username} | invite_link={invite_link}")
+                await save_admin_group(chat_id, chat_title, chat_type, member_count, perms, username=username, invite_link=invite_link)
                 
                 link_display = f"🔗 {invite_link}" if invite_link else "🔗 No link available"
                 
@@ -6513,28 +6508,8 @@ def register_bot_handlers():
             print(f"Error removing user from broadcast: {e}")
 
     # ==================== ADMIN GROUPS MANAGEMENT ====================
-    
-    async def save_admin_group(chat_id: int, chat_title: str, chat_type: str, member_count: int, permissions: dict):
-        """Save group where bot is admin with full permissions info"""
-        if admin_groups_col is None:
-            return False
-        try:
-            admin_groups_col.update_one(
-                {"chat_id": chat_id},
-                {"$set": {
-                    "chat_id": chat_id,
-                    "chat_title": chat_title,
-                    "chat_type": chat_type,
-                    "member_count": member_count,
-                    "permissions": permissions,
-                    "updated_at": datetime.utcnow()
-                }},
-                upsert=True
-            )
-            return True
-        except Exception as e:
-            print(f"Error saving admin group: {e}")
-            return False
+    # Note: Primary save_admin_group is defined earlier. This is a fallback reference.
+    # The main function is at line ~1321 with username/invite_link support.
 
     async def remove_admin_group(chat_id: int):
         """Remove group from admin groups list"""
@@ -6562,16 +6537,19 @@ def register_bot_handlers():
         For private groups without username, only an invite link is clickable.
         Requires bot admin right: "Invite users".
         """
+        print(f"📎 _get_best_join_link START for chat_id={chat_id}")
         username = ""
         invite_link = ""
 
         # Try multiple possible id variants to avoid PeerIdInvalid / "chat not found" issues.
         chat = chat_obj
         if chat is None:
+            print(f"📎 chat_obj is None, trying to fetch...")
             for cid in _candidate_chat_ids(chat_id):
                 try:
                     chat = await bot_client.get_chat(cid)
                     chat_id = cid
+                    print(f"📎 got chat via cid={cid}")
                     break
                 except PeerIdInvalid:
                     try:
@@ -6585,23 +6563,30 @@ def register_bot_handlers():
                     except Exception:
                         chat = None
                         continue
-                except Exception:
+                except Exception as e:
+                    print(f"📎 get_chat({cid}) failed: {type(e).__name__}: {e}")
                     chat = None
                     continue
 
         if chat is not None:
             username = (getattr(chat, "username", "") or "").strip().lstrip("@")
             if username:
+                print(f"📎 Found username: {username}")
                 return username, ""
 
             invite_link = (getattr(chat, "invite_link", "") or "").strip()
             if invite_link:
+                print(f"📎 Found existing invite_link on chat object: {invite_link}")
                 return "", invite_link
+        else:
+            print(f"📎 Could not fetch chat object for {chat_id}")
 
         # Pyrogram export (works when bot can invite)
+        print(f"📎 Trying export_chat_invite_link for {chat_id}...")
         try:
             invite_link = (await bot_client.export_chat_invite_link(chat_id)).strip()
             if invite_link:
+                print(f"📎 export_chat_invite_link SUCCESS: {invite_link}")
                 return "", invite_link
         except Exception as e:
             print(f"⚠️ export_chat_invite_link failed for {chat_id}: {type(e).__name__}: {e}")
@@ -6612,6 +6597,7 @@ def register_bot_handlers():
             print("⚠️ BOT_TOKEN missing; cannot create invite links via Bot API")
             return "", ""
 
+        print(f"📎 Trying Bot API fallback for {chat_id}...")
         try:
             import aiohttp
 
@@ -6623,26 +6609,31 @@ def register_bot_handlers():
                     try:
                         async with sess.post(f"{base}/exportChatInviteLink", json={"chat_id": str(cid)}) as resp:
                             data = await resp.json()
+                        print(f"📎 Bot API exportChatInviteLink({cid}) response: {data}")
                         if data.get("ok") and data.get("result"):
                             link = (data.get("result") or "").strip()
                             if link:
+                                print(f"📎 Bot API exportChatInviteLink SUCCESS: {link}")
                                 return "", link
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"📎 exportChatInviteLink({cid}) exception: {type(e).__name__}: {e}")
 
                     # 2) createChatInviteLink
                     try:
                         async with sess.post(f"{base}/createChatInviteLink", json={"chat_id": str(cid)}) as resp:
                             data = await resp.json()
+                        print(f"📎 Bot API createChatInviteLink({cid}) response: {data}")
                         if data.get("ok") and data.get("result"):
                             link = (data["result"].get("invite_link") or "").strip()
                             if link:
+                                print(f"📎 Bot API createChatInviteLink SUCCESS: {link}")
                                 return "", link
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"📎 createChatInviteLink({cid}) exception: {type(e).__name__}: {e}")
         except Exception as e:
             print(f"⚠️ Bot API invite-link fallback failed for {chat_id}: {type(e).__name__}: {e}")
 
+        print(f"📎 _get_best_join_link END for {chat_id} - NO LINK FOUND")
         return "", ""
 
     async def refresh_admin_groups() -> dict:
@@ -6710,19 +6701,13 @@ def register_bot_handlers():
                             "can_manage_chat": getattr(member.privileges, "can_manage_chat", False) if (member is not None and hasattr(member, "privileges")) else False,
                         }
 
-                        ok = await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions)
+                        # Fetch link FIRST before saving
+                        username, invite_link = await _get_best_join_link(chat_id, chat_obj=chat)
+                        print(f"🔗 refresh_admin_groups: {chat_title} | username={username} | invite_link={invite_link}")
+
+                        ok = await save_admin_group(chat_id, chat_title, chat_type, member_count, permissions, username=username, invite_link=invite_link)
                         if ok:
                             saved += 1
-
-                        username, invite_link = await _get_best_join_link(chat_id, chat_obj=chat)
-                        try:
-                            admin_groups_col.update_one(
-                                {"chat_id": chat_id},
-                                {"$set": {"username": username or None, "invite_link": invite_link or None}},
-                                upsert=True,
-                            )
-                        except Exception:
-                            pass
 
                     else:
                         await remove_admin_group(chat_id)
