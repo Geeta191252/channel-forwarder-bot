@@ -4723,45 +4723,99 @@ def register_bot_handlers():
         
         if len(parts) < 2:
             await message.reply(
-                "❌ **Usage:**\n"
-                "`/setforcejoin @channel_username`\n"
-                "OR\n"
-                "`/setforcejoin @channel|Channel Name|https://t.me/+invite`\n\n"
-                "**Example:**\n"
-                "`/setforcejoin @MyChannel|My Channel|https://t.me/+abc123`"
+                "❌ **Usage:** `/setforcejoin @channel_or_group|Name|https://t.me/+invitelink`\n\n"
+                "**Examples:**\n"
+                "• Channel: `/setforcejoin @MyChannel|My Channel|https://t.me/+abc123`\n"
+                "• Group: `/setforcejoin -1001234567890|My Group|https://t.me/+xyz789`\n\n"
+                "💡 **Note:** For private groups, use chat ID with invite link!"
             )
             return
         
         channel_data = parts[1].strip()
         channel_parts = channel_data.split("|")
         
-        channel_id = channel_parts[0].strip()
-        channel_name = channel_parts[1].strip() if len(channel_parts) > 1 else channel_id
+        target_id = channel_parts[0].strip()
+        target_name = channel_parts[1].strip() if len(channel_parts) > 1 else target_id
         invite_link = channel_parts[2].strip() if len(channel_parts) > 2 else ""
         
-        # Validate channel format
-        if not channel_id.startswith("@") and not channel_id.startswith("-"):
-            channel_id = "@" + channel_id
+        # Determine if it's a group or channel
+        target_type = "channel"  # default
         
-        # If no invite link provided, try to create one
+        # Check if it's a numeric ID (group/supergroup)
+        if target_id.lstrip("-").isdigit():
+            # It's a chat ID - could be group or channel
+            target_type = "group_or_channel"
+        elif target_id.startswith("@"):
+            target_type = "username"
+        else:
+            target_id = "@" + target_id
+            target_type = "username"
+        
+        # Try to get chat info and generate invite link if needed
+        try:
+            if target_id.lstrip("-").isdigit():
+                check_chat = await client.get_chat(int(target_id))
+            else:
+                check_chat = await client.get_chat(target_id)
+            
+            # Get proper name if not provided
+            if target_name == target_id:
+                target_name = check_chat.title or target_name
+            
+            # Determine actual type
+            if check_chat.type in [ChatType.CHANNEL]:
+                target_type = "channel"
+            else:
+                target_type = "group"
+            
+            # Get or generate invite link for private chats
+            if not invite_link:
+                if check_chat.username:
+                    invite_link = f"https://t.me/{check_chat.username}"
+                elif check_chat.invite_link:
+                    invite_link = check_chat.invite_link
+                else:
+                    # Try to create invite link (bot must be admin)
+                    try:
+                        new_link = await client.create_chat_invite_link(check_chat.id)
+                        invite_link = new_link.invite_link
+                    except Exception:
+                        invite_link = ""
+            
+            # Store the numeric ID for reliable checking
+            target_id = str(check_chat.id)
+            
+        except Exception as e:
+            # Continue with provided info even if we can't fetch chat
+            print(f"Could not fetch target chat info: {e}")
+        
         if not invite_link:
-            invite_link = f"https://t.me/{channel_id.replace('@', '')}"
+            await message.reply(
+                f"⚠️ **Warning:** No invite link found!\n\n"
+                f"Please provide invite link manually:\n"
+                f"`/setforcejoin {target_id}|{target_name}|https://t.me/+YOUR_LINK`"
+            )
+            return
         
-        # Save config
+        # Save config with type info
         group_forcejoin_config[chat_id] = {
             "enabled": True,
-            "channel_id": channel_id,
-            "channel_name": channel_name,
-            "invite_link": invite_link
+            "channel_id": target_id,
+            "channel_name": target_name,
+            "invite_link": invite_link,
+            "target_type": target_type  # "channel" or "group"
         }
         save_group_forcejoin(chat_id)
         
+        type_emoji = "📢" if target_type == "channel" else "👥"
+        type_label = "Channel" if target_type == "channel" else "Group"
+        
         await message.reply(
             f"✅ **Force Join Enabled!**\n\n"
-            f"📢 Channel: `{channel_id}`\n"
-            f"📛 Name: **{channel_name}**\n"
+            f"{type_emoji} {type_label}: `{target_id}`\n"
+            f"📛 Name: **{target_name}**\n"
             f"🔗 Link: {invite_link}\n\n"
-            f"⚠️ Users must join this channel to send messages.\n"
+            f"⚠️ Users must join this {type_label.lower()} to send messages.\n"
             f"Messages from non-members will be deleted with a join button!"
         )
     
@@ -4812,10 +4866,14 @@ def register_bot_handlers():
         config = group_forcejoin_config.get(chat_id, {})
         
         if config.get("enabled") and config.get("channel_id"):
+            target_type = config.get("target_type", "channel")
+            type_emoji = "📢" if target_type == "channel" else "👥"
+            type_label = "Channel" if target_type == "channel" else "Group"
+            
             await message.reply(
                 f"🔐 **Force Join Status**\n\n"
                 f"**Status:** 🟢 Enabled\n"
-                f"📢 Channel: `{config.get('channel_id')}`\n"
+                f"{type_emoji} {type_label}: `{config.get('channel_id')}`\n"
                 f"📛 Name: **{config.get('channel_name', 'N/A')}**\n"
                 f"🔗 Link: {config.get('invite_link', 'N/A')}\n\n"
                 f"⚠️ Users must join to send messages!"
@@ -4858,23 +4916,38 @@ def register_bot_handlers():
         except:
             pass
         
-        # Check if user has joined the channel
-        channel_id = config.get("channel_id")
+        # Check if user has joined the target channel/group
+        target_id = config.get("channel_id")
+        target_type = config.get("target_type", "channel")  # "channel" or "group"
+        
         try:
-            if channel_id.startswith("-"):
-                check_chat_id = int(channel_id)
-            elif channel_id.startswith("@"):
-                check_chat_id = channel_id
+            # Parse target ID
+            if str(target_id).lstrip("-").isdigit():
+                check_chat_id = int(target_id)
+            elif str(target_id).startswith("@"):
+                check_chat_id = target_id
             else:
-                check_chat_id = "@" + channel_id
+                check_chat_id = "@" + target_id
             
-            channel_member = await client.get_chat_member(check_chat_id, user_id)
-            if channel_member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
-                # User has joined, allow message
+            # Check membership
+            target_member = await client.get_chat_member(check_chat_id, user_id)
+            
+            # For both groups and channels, check if user is a member
+            if target_member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
+                # User is a member, allow message
                 return
+                
         except Exception as e:
-            # If we can't check (user not found in channel), assume not joined
-            pass
+            # If we can't check membership, log and assume not joined
+            error_str = str(e).lower()
+            # If user is not found in chat = not a member
+            if "user not found" in error_str or "user_not_participant" in error_str:
+                pass  # Continue to delete message
+            else:
+                # Other errors (bot not admin in target, etc.) - log but don't block
+                print(f"Force join check error for {target_id}: {e}")
+                # Don't block user if we can't verify (graceful degradation)
+                return
         
         # User hasn't joined - delete message and send join button
         try:
@@ -4884,11 +4957,14 @@ def register_bot_handlers():
         
         # Send join button message
         user_name = message.from_user.first_name if message.from_user else "User"
-        channel_name = config.get("channel_name", "Channel")
+        target_name = config.get("channel_name", "Channel/Group")
         invite_link = config.get("invite_link", "")
         
+        type_emoji = "📢" if target_type == "channel" else "👥"
+        type_label = "channel" if target_type == "channel" else "group"
+        
         join_button = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"📢 Join {channel_name}", url=invite_link)],
+            [InlineKeyboardButton(f"{type_emoji} Join {target_name}", url=invite_link)],
             [InlineKeyboardButton("✅ I've Joined", callback_data=f"check_forcejoin_{chat_id}_{user_id}")]
         ])
         
@@ -4896,7 +4972,7 @@ def register_bot_handlers():
             warn_msg = await client.send_message(
                 chat_id,
                 f"👋 **{user_name}**, आप यहाँ message नहीं भेज सकते!\n\n"
-                f"📢 पहले **{channel_name}** join करो, फिर message करो!\n\n"
+                f"{type_emoji} पहले **{target_name}** join करो, फिर message करो!\n\n"
                 f"⬇️ नीचे button पर click करके join करो:",
                 reply_markup=join_button
             )
@@ -4942,16 +5018,20 @@ def register_bot_handlers():
             return
         
         # Check if user has joined now
+        target_id = config.get("channel_id")
+        target_type = config.get("target_type", "channel")
+        
         try:
-            if channel_id.startswith("-"):
-                check_chat_id = int(channel_id)
-            elif channel_id.startswith("@"):
-                check_chat_id = channel_id
+            # Parse target ID
+            if str(target_id).lstrip("-").isdigit():
+                check_chat_id = int(target_id)
+            elif str(target_id).startswith("@"):
+                check_chat_id = target_id
             else:
-                check_chat_id = "@" + channel_id
+                check_chat_id = "@" + target_id
             
-            channel_member = await client.get_chat_member(check_chat_id, clicker_user_id)
-            if channel_member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
+            target_member = await client.get_chat_member(check_chat_id, clicker_user_id)
+            if target_member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
                 # User has joined!
                 await callback_query.answer("✅ धन्यवाद! अब आप message भेज सकते हैं!", show_alert=True)
                 try:

@@ -13,8 +13,8 @@ export const ForceJoin = () => {
     {
       id: "setforcejoin",
       name: "Set Force Join",
-      command: "/setforcejoin @channel|Channel Name|https://t.me/+invite",
-      description: "Group में Force Join enable करें। Users को channel join करना होगा।",
+      command: "/setforcejoin @channel_or_group|Name|https://t.me/+invite",
+      description: "Group में Force Join enable करें। Users को channel/group join करना होगा।",
       icon: UserPlus,
       color: "text-green-500",
     },
@@ -51,7 +51,7 @@ export const ForceJoin = () => {
           <CardTitle className="text-lg">Force Join Settings</CardTitle>
         </div>
         <CardDescription>
-          Group में message भेजने से पहले users को channel join करना होगा
+          Group में message भेजने से पहले users को channel या group join करना होगा
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -97,7 +97,8 @@ export const ForceJoin = () => {
           </h4>
           <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
             <li>Bot को group में admin बनाएं (Delete messages permission)</li>
-            <li>Bot को channel में admin बनाएं</li>
+            <li>Bot को target channel/group में admin बनाएं</li>
+            <li>For private groups: Chat ID और invite link use करें</li>
             <li><code className="bg-background px-1 rounded">/setforcejoin</code> command use करें</li>
             <li>Non-members के messages auto-delete होंगे</li>
           </ol>
