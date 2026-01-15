@@ -6096,6 +6096,43 @@ def register_bot_handlers():
         except Exception as e:
             print(f"Error saving user for broadcast: {e}")
 
+    def _candidate_chat_ids(chat_id: int) -> list[int]:
+        """Return possible chat_id variants.
+
+        Telegram IDs differ by client/library:
+        - Basic groups: negative id like -123456
+        - Supergroups/channels: often -1001234567890
+        Some environments store/return the "missing -100" form, which can cause PeerIdInvalid.
+        """
+        ids: list[int] = []
+        try:
+            ids.append(int(chat_id))
+        except Exception:
+            return []
+
+        s = str(ids[0])
+        if s.startswith("-100"):
+            # Try the non -100 variant too
+            try:
+                ids.append(int("-" + s[4:]))
+            except Exception:
+                pass
+        elif s.startswith("-") and len(s) >= 10:
+            # Try adding -100 prefix (supergroup/channel form)
+            try:
+                ids.append(int("-100" + s[1:]))
+            except Exception:
+                pass
+
+        # De-dup while preserving order
+        seen = set()
+        out: list[int] = []
+        for x in ids:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
     async def bot_api_is_admin(chat_id: int) -> bool:
         """Fallback admin check via raw Bot API.
         Helps when Pyrogram raises PeerIdInvalid due to missing peer cache."""
@@ -6107,15 +6144,19 @@ def register_bot_handlers():
             base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                 me = await bot_client.get_me()
-                async with session.get(
-                    f"{base_url}/getChatMember",
-                    params={"chat_id": str(chat_id), "user_id": str(me.id)},
-                ) as r:
-                    data = await r.json()
-            if not isinstance(data, dict) or not data.get("ok"):
-                return False
-            status = ((data.get("result") or {}).get("status") or "").lower()
-            return status in {"administrator", "creator"}
+                for cid in _candidate_chat_ids(chat_id):
+                    try:
+                        async with session.get(
+                            f"{base_url}/getChatMember",
+                            params={"chat_id": str(cid), "user_id": str(me.id)},
+                        ) as r:
+                            data = await r.json()
+                        if isinstance(data, dict) and data.get("ok"):
+                            status = ((data.get("result") or {}).get("status") or "").lower()
+                            return status in {"administrator", "creator"}
+                    except Exception:
+                        continue
+            return False
         except Exception:
             return False
 
@@ -6134,17 +6175,21 @@ def register_bot_handlers():
             base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                 me = await bot_client.get_me()
-                async with session.get(
-                    f"{base_url}/getChatMember",
-                    params={"chat_id": str(chat_id), "user_id": str(me.id)},
-                ) as r:
-                    data = await r.json()
-            if not isinstance(data, dict) or not data.get("ok"):
-                return None
-            result = data.get("result") or {}
-            # For administrators, Telegram returns granular rights like can_invite_users.
-            val = result.get("can_invite_users")
-            return bool(val) if val is not None else None
+                for cid in _candidate_chat_ids(chat_id):
+                    try:
+                        async with session.get(
+                            f"{base_url}/getChatMember",
+                            params={"chat_id": str(cid), "user_id": str(me.id)},
+                        ) as r:
+                            data = await r.json()
+                        if not isinstance(data, dict) or not data.get("ok"):
+                            continue
+                        result = data.get("result") or {}
+                        val = result.get("can_invite_users")
+                        return bool(val) if val is not None else None
+                    except Exception:
+                        continue
+            return None
         except Exception:
             return None
 
@@ -6157,22 +6202,32 @@ def register_bot_handlers():
             try:
                 bot_me = await bot_client.get_me()
 
-                # Some hosts/clients can throw PeerIdInvalid even for valid -100... ids
-                # if the peer isn't cached yet. Force-resolve once and retry.
-                try:
-                    member = await bot_client.get_chat_member(chat_id, bot_me.id)
-                except PeerIdInvalid:
+                member = None
+                last_err = None
+                for cid in _candidate_chat_ids(chat_id):
                     try:
-                        await bot_client.get_chat(chat_id)  # resolve/cache peer
-                    except Exception:
-                        pass
-                    try:
-                        member = await bot_client.get_chat_member(chat_id, bot_me.id)
-                    except PeerIdInvalid:
-                        # Final fallback: raw Bot API (doesn't depend on local peer cache)
-                        if not await bot_api_is_admin(chat_id):
-                            return False
+                        # Some hosts/clients can throw PeerIdInvalid even for valid ids
+                        # if the peer isn't cached yet. Force-resolve once and retry.
+                        try:
+                            member = await bot_client.get_chat_member(cid, bot_me.id)
+                        except PeerIdInvalid:
+                            try:
+                                await bot_client.get_chat(cid)  # resolve/cache peer
+                            except Exception:
+                                pass
+                            member = await bot_client.get_chat_member(cid, bot_me.id)
+
+                        chat_id = cid  # use the working id going forward
+                        break
+                    except Exception as e:
+                        last_err = e
                         member = None
+                        continue
+
+                if member is None:
+                    # Final fallback: raw Bot API (doesn't depend on local peer cache)
+                    if not await bot_api_is_admin(chat_id):
+                        return False
 
                 if member is not None and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                     return False  # Not admin, don't save
@@ -6498,22 +6553,29 @@ def register_bot_handlers():
         username = ""
         invite_link = ""
 
+        # Try multiple possible id variants to avoid PeerIdInvalid / "chat not found" issues.
         chat = chat_obj
         if chat is None:
-            # Some clients/hosts can throw PeerIdInvalid if the peer isn't cached yet.
-            try:
-                chat = await bot_client.get_chat(chat_id)
-            except PeerIdInvalid:
+            for cid in _candidate_chat_ids(chat_id):
                 try:
-                    await bot_client.get_chat(chat_id)  # try again to force-resolve/cache
-                except Exception:
-                    pass
-                try:
-                    chat = await bot_client.get_chat(chat_id)
+                    chat = await bot_client.get_chat(cid)
+                    chat_id = cid
+                    break
+                except PeerIdInvalid:
+                    try:
+                        await bot_client.get_chat(cid)  # force resolve/cache
+                    except Exception:
+                        pass
+                    try:
+                        chat = await bot_client.get_chat(cid)
+                        chat_id = cid
+                        break
+                    except Exception:
+                        chat = None
+                        continue
                 except Exception:
                     chat = None
-            except Exception:
-                chat = None
+                    continue
 
         if chat is not None:
             username = (getattr(chat, "username", "") or "").strip().lstrip("@")
@@ -6544,25 +6606,28 @@ def register_bot_handlers():
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as sess:
                 base = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-                # 1) exportChatInviteLink
-                async with sess.post(f"{base}/exportChatInviteLink", json={"chat_id": str(chat_id)}) as resp:
-                    data = await resp.json()
-                    if data.get("ok") and data.get("result"):
-                        link = (data.get("result") or "").strip()
-                        if link:
-                            return "", link
-                    else:
-                        print(f"⚠️ exportChatInviteLink API error for {chat_id}: {data}")
+                for cid in _candidate_chat_ids(chat_id):
+                    # 1) exportChatInviteLink
+                    try:
+                        async with sess.post(f"{base}/exportChatInviteLink", json={"chat_id": str(cid)}) as resp:
+                            data = await resp.json()
+                        if data.get("ok") and data.get("result"):
+                            link = (data.get("result") or "").strip()
+                            if link:
+                                return "", link
+                    except Exception:
+                        pass
 
-                # 2) createChatInviteLink
-                async with sess.post(f"{base}/createChatInviteLink", json={"chat_id": str(chat_id)}) as resp:
-                    data = await resp.json()
-                    if data.get("ok") and data.get("result"):
-                        link = (data["result"].get("invite_link") or "").strip()
-                        if link:
-                            return "", link
-                    else:
-                        print(f"⚠️ createChatInviteLink API error for {chat_id}: {data}")
+                    # 2) createChatInviteLink
+                    try:
+                        async with sess.post(f"{base}/createChatInviteLink", json={"chat_id": str(cid)}) as resp:
+                            data = await resp.json()
+                        if data.get("ok") and data.get("result"):
+                            link = (data["result"].get("invite_link") or "").strip()
+                            if link:
+                                return "", link
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"⚠️ Bot API invite-link fallback failed for {chat_id}: {type(e).__name__}: {e}")
 
