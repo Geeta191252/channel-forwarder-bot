@@ -144,6 +144,21 @@ export function AdminGroups({ botApiUrl = "" }: AdminGroupsProps) {
 
       if (data?.success && data?.link) {
         toast.success("Link generated");
+
+        // Optimistic UI update (handles cases where DB stores chat_id as string vs number)
+        setGroups((prev) =>
+          prev.map((g) =>
+            String(g.chat_id) === String(chatId)
+              ? {
+                  ...g,
+                  username: data?.username ?? g.username,
+                  invite_link: data?.invite_link ?? data?.link ?? g.invite_link,
+                }
+              : g,
+          ),
+        );
+
+        // Also re-fetch to stay in sync with backend
         await fetchGroups();
       } else {
         const hint =
