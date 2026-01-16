@@ -8,9 +8,8 @@ import signal
 import sys
 from datetime import datetime
 from flask import Flask, request, jsonify
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters, idle, StopPropagation
 
-# Ensure logs are not buffered (so Koyeb shows ENV CHECK / bot start logs)
 try:
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
@@ -4271,7 +4270,55 @@ def register_bot_handlers():
         except Exception as e:
             print(f"⚠️ JoinWait unmute failed for {user_id} in {chat_id}: {e}")
             return False
-    
+
+    async def joinwait_mute_existing_members(client, chat_id: int, required: int):
+        """When /setjoinwait is enabled, immediately mute all existing non-admin users.
+        This prevents other bots from reacting to their first message before we delete it."""
+        scan_limit = int(os.getenv("JOINWAIT_MUTE_SCAN_LIMIT", "5000"))
+        muted = 0
+        scanned = 0
+
+        try:
+            async for m in client.get_chat_members(chat_id):
+                scanned += 1
+                if scanned > scan_limit:
+                    break
+
+                u = getattr(m, "user", None)
+                if not u or u.is_bot:
+                    continue
+
+                uid = u.id
+                if uid in ADMIN_IDS:
+                    continue
+
+                # Skip admins (cached check is safest)
+                try:
+                    if await is_group_admin_cached(client, chat_id, uid):
+                        continue
+                except Exception:
+                    pass
+
+                # If they already satisfied requirement, don't mute
+                try:
+                    if get_user_added_count(chat_id, uid) >= required:
+                        continue
+                except Exception:
+                    pass
+
+                try:
+                    ok = await mute_user_for_joinwait(client, chat_id, uid)
+                    if ok:
+                        muted += 1
+                except FloodWait as e:
+                    await asyncio.sleep(int(getattr(e, "value", 1)) + 1)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"⚠️ JoinWait initial mute scan failed in {chat_id}: {e}")
+
+        print(f"✅ JoinWait initial scan done | chat={chat_id} scanned={scanned} muted={muted}")
+
     def is_group_or_bot_admin(chat_id: int, user_id: int, member_obj=None) -> bool:
         if user_id in ADMIN_IDS:
             return True
@@ -4377,7 +4424,10 @@ def register_bot_handlers():
         }
         save_new_member_wait(chat_id)
         reset_joinwait_chat_counts(chat_id)
-        
+
+        # IMPORTANT: Immediately mute existing members so other bots can't reply before our delete/mute kicks in
+        asyncio.create_task(joinwait_mute_existing_members(client, chat_id, required_joins))
+
         await _safe_group_reply(
             client,
             message,
