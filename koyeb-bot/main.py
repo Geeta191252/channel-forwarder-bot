@@ -4637,79 +4637,134 @@ def register_bot_handlers():
         GROUP_ADMIN_CACHE[chat_id] = {"ts": now, "ids": admin_ids}
         return user_id in admin_ids
 
-    @bot_client.on_message(
-        GROUP_CHAT
-        & ~filters.regex(
-            # Don't auto-delete commands in groups; commands must reach handlers.
-            # This keeps JoinWait "instant delete" for normal messages while allowing /commands.
-            r"^/(?:[A-Za-z0-9_]{1,32})(?:@[A-Za-z0-9_]+)?(?:\s|$)"
-        ),
-        # Run as early as possible so the user's message disappears instantly.
-        group=-999,
-    )
-    async def new_member_wait_filter(client, message):
-        """Block messages from ALL users until join count is met - mute user and delete message"""
+    from pyrogram.raw import functions, types as raw_types
+    from pyrogram.handlers import RawUpdateHandler
+    
+    # Cache for blocked users to avoid repeated DB lookups
+    JOINWAIT_BLOCK_CACHE = {}  # {(chat_id, user_id): {"blocked": bool, "ts": timestamp}}
+    JOINWAIT_BLOCK_CACHE_TTL = 5  # seconds
+    
+    async def raw_joinwait_handler(client, update, users, chats):
+        """RAW UPDATE HANDLER - Runs before ALL other handlers to block messages from locked users.
+        This ensures movie bots NEVER see messages from users who haven't added enough members."""
         global new_member_wait_config
-
-        chat_id = message.chat.id
-        user_id = message.from_user.id if message.from_user else None
-
-        if not user_id:
+        
+        # Only handle new messages in groups
+        if not isinstance(update, (raw_types.UpdateNewMessage, raw_types.UpdateNewChannelMessage)):
             return
-
-        # Skip if sender_chat (anonymous admin)
-        if getattr(message, "sender_chat", None) is not None:
+        
+        message = getattr(update, "message", None)
+        if not message:
             return
-
-        # Load config if not in memory
-        if chat_id not in new_member_wait_config:
-            new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
-
-        config = new_member_wait_config.get(chat_id, {})
-
-        # Skip if feature is disabled
-        if not config.get("enabled"):
+        
+        # Get chat ID
+        peer_id = getattr(message, "peer_id", None)
+        if not peer_id:
             return
-
-        # Skip if user is admin (cached for speed)
-        try:
-            if await is_group_admin_cached(client, chat_id, user_id):
+        
+        # Only handle groups/supergroups
+        if isinstance(peer_id, raw_types.PeerChannel):
+            chat_id = -1000000000000 - peer_id.channel_id
+        elif isinstance(peer_id, raw_types.PeerChat):
+            chat_id = -peer_id.chat_id
+        else:
+            return  # Not a group
+        
+        # Get user ID
+        from_id = getattr(message, "from_id", None)
+        if isinstance(from_id, raw_types.PeerUser):
+            user_id = from_id.user_id
+        elif hasattr(message, "from_id") and isinstance(message.from_id, int):
+            user_id = message.from_id
+        else:
+            return  # No user
+        
+        # Skip commands (let them through to command handlers)
+        msg_text = getattr(message, "message", "") or ""
+        if msg_text.startswith("/"):
+            return
+        
+        # Check cache first for speed
+        cache_key = (chat_id, user_id)
+        now = time.time()
+        cached = JOINWAIT_BLOCK_CACHE.get(cache_key)
+        if cached and (now - cached["ts"]) < JOINWAIT_BLOCK_CACHE_TTL:
+            if not cached["blocked"]:
+                return  # User is allowed
+        else:
+            # Cache miss - check config
+            if chat_id not in new_member_wait_config:
+                new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
+            
+            config = new_member_wait_config.get(chat_id, {})
+            
+            if not config.get("enabled"):
+                JOINWAIT_BLOCK_CACHE[cache_key] = {"blocked": False, "ts": now}
                 return
-        except Exception:
-            pass
-        # Skip if user is bot admin
-        if user_id in ADMIN_IDS:
-            return
-        
-        required = int(config.get("required_adds", 3))
-        current = get_user_added_count(chat_id, user_id)
-        
-        if current >= required:
-            return
-        
-        # User hasn't added enough members yet - DELETE IMMEDIATELY (await) so other bots can't see it
-        try:
-            # CRITICAL: Must await delete so message is gone BEFORE other bots can process it
-            await message.delete()
-        except Exception as e:
-            print(f"JoinWait delete failed: {e}")
-
-        # Also mute the user to prevent future messages
-        asyncio.create_task(mute_user_for_joinwait(client, chat_id, user_id))
-
-        # Stop propagation (though other bots won't see deleted message anyway)
-        try:
-            message.stop_propagation()
-        except Exception:
-            pass
-
-        async def _notify_joinwait():
+            
+            # Check if user is admin (using cache)
             try:
+                if user_id in ADMIN_IDS:
+                    JOINWAIT_BLOCK_CACHE[cache_key] = {"blocked": False, "ts": now}
+                    return
+            except Exception:
+                pass
+            
+            required = int(config.get("required_adds", 3))
+            current = get_user_added_count(chat_id, user_id)
+            
+            if current >= required:
+                JOINWAIT_BLOCK_CACHE[cache_key] = {"blocked": False, "ts": now}
+                return
+            
+            # User should be blocked
+            JOINWAIT_BLOCK_CACHE[cache_key] = {"blocked": True, "ts": now}
+        
+        # ====== USER IS BLOCKED - DELETE MESSAGE IMMEDIATELY ======
+        msg_id = getattr(message, "id", None)
+        if msg_id:
+            try:
+                # Use raw API to delete message (fastest possible method)
+                if isinstance(peer_id, raw_types.PeerChannel):
+                    await client.invoke(
+                        functions.channels.DeleteMessages(
+                            channel=await client.resolve_peer(chat_id),
+                            id=[msg_id]
+                        )
+                    )
+                else:
+                    await client.invoke(
+                        functions.messages.DeleteMessages(
+                            id=[msg_id],
+                            revoke=True
+                        )
+                    )
+                print(f"🔇 JoinWait RAW: Deleted message {msg_id} from user {user_id} in {chat_id}")
+            except Exception as e:
+                print(f"⚠️ JoinWait RAW delete failed: {e}")
+        
+        # Mute user (async, non-blocking)
+        asyncio.create_task(mute_user_for_joinwait(client, chat_id, user_id))
+        
+        # Send notification (async, non-blocking)
+        async def _send_raw_notify():
+            try:
+                if chat_id not in new_member_wait_config:
+                    new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
+                config = new_member_wait_config.get(chat_id, {})
+                required = int(config.get("required_adds", 3))
+                current = get_user_added_count(chat_id, user_id)
                 remaining = max(0, required - current)
-                user_name = message.from_user.first_name
+                
+                # Get user info
+                try:
+                    user = await client.get_users(user_id)
+                    user_name = user.first_name
+                except Exception:
+                    user_name = "User"
                 user_mention = f"[{user_name}](tg://user?id={user_id})"
-
-                # Get group invite link for Add Member button
+                
+                # Get invite link
                 try:
                     chat_info = await client.get_chat(chat_id)
                     invite_link = chat_info.invite_link
@@ -4717,8 +4772,7 @@ def register_bot_handlers():
                         invite_link = (await client.create_chat_invite_link(chat_id)).invite_link
                 except Exception:
                     invite_link = None
-
-                # Build inline buttons
+                
                 buttons = []
                 if invite_link:
                     buttons.append([
@@ -4733,7 +4787,7 @@ def register_bot_handlers():
                         callback_data=f"joinwait_check_{chat_id}_{user_id}",
                     )
                 ])
-
+                
                 notify_msg = await client.send_message(
                     chat_id,
                     f"🔇 **You are muted!**\n"
@@ -4745,10 +4799,73 @@ def register_bot_handlers():
                 )
                 asyncio.create_task(auto_delete_message(notify_msg, 15))
             except Exception as e:
-                print(f"Failed to send joinwait notify: {e}")
+                print(f"JoinWait notify failed: {e}")
+        
+        asyncio.create_task(_send_raw_notify())
+        
+        # CRITICAL: Raise StopPropagation to prevent ALL other handlers from seeing this update
+        raise StopPropagation
+    
+    # Register the raw handler with highest priority (group=-9999)
+    bot_client.add_handler(RawUpdateHandler(raw_joinwait_handler), group=-9999)
+    print("✅ JoinWait RAW handler registered with priority -9999")
+    
+    @bot_client.on_message(
+        GROUP_CHAT
+        & ~filters.regex(
+            r"^/(?:[A-Za-z0-9_]{1,32})(?:@[A-Za-z0-9_]+)?(?:\s|$)"
+        ),
+        group=-999,
+    )
+    async def new_member_wait_filter(client, message):
+        """Fallback filter for JoinWait (RAW handler should catch most messages first)"""
+        global new_member_wait_config
 
-        # Run notification in background so next deletes stay instant
-        asyncio.create_task(_notify_joinwait())
+        chat_id = message.chat.id
+        user_id = message.from_user.id if message.from_user else None
+
+        if not user_id:
+            return
+
+        if getattr(message, "sender_chat", None) is not None:
+            return
+
+        if chat_id not in new_member_wait_config:
+            new_member_wait_config[chat_id] = load_new_member_wait(chat_id)
+
+        config = new_member_wait_config.get(chat_id, {})
+
+        if not config.get("enabled"):
+            return
+
+        try:
+            if await is_group_admin_cached(client, chat_id, user_id):
+                return
+        except Exception:
+            pass
+        if user_id in ADMIN_IDS:
+            return
+        
+        required = int(config.get("required_adds", 3))
+        current = get_user_added_count(chat_id, user_id)
+        
+        if current >= required:
+            return
+        
+        # Delete and mute (fallback if RAW handler missed it)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        asyncio.create_task(mute_user_for_joinwait(client, chat_id, user_id))
+
+        try:
+            message.stop_propagation()
+        except Exception:
+            pass
+
+        # RAW handler handles notifications, fallback just deletes and stops propagation
         return
     
     # ============ JOINWAIT CALLBACK HANDLER ============
