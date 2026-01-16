@@ -21,7 +21,7 @@ except Exception:
 if not hasattr(filters, "supergroup"):
     filters.supergroup = filters.group
 
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
 from pyrogram.enums import ChatType, ChatMemberStatus
 from pyrogram.errors import (
     FloodWait,
@@ -32,6 +32,7 @@ from pyrogram.errors import (
     ChatWriteForbidden,
     Forbidden,
     PeerIdInvalid,
+    UserNotParticipant,
 )
 
 # Chat type helper: match both GROUP and SUPERGROUP reliably
@@ -4227,6 +4228,50 @@ def register_bot_handlers():
                 if k[0] == chat_id:
                     joinwait_invites_cache.pop(k, None)
     
+    async def mute_user_for_joinwait(client, chat_id: int, user_id: int):
+        """Mute/restrict a user so they cannot send any messages (blocks all bots from responding)."""
+        try:
+            await client.restrict_chat_member(
+                chat_id,
+                user_id,
+                ChatPermissions(
+                    can_send_messages=False,
+                    can_send_media_messages=False,
+                    can_send_polls=False,
+                    can_send_other_messages=False,
+                    can_add_web_page_previews=False,
+                    can_invite_users=True,  # Allow inviting so they can add members
+                )
+            )
+            print(f"🔇 JoinWait: Muted user {user_id} in chat {chat_id}")
+            return True
+        except Exception as e:
+            print(f"⚠️ JoinWait mute failed for {user_id} in {chat_id}: {e}")
+            return False
+    
+    async def unmute_user_for_joinwait(client, chat_id: int, user_id: int):
+        """Unmute/unrestrict a user after they've added enough members."""
+        try:
+            await client.restrict_chat_member(
+                chat_id,
+                user_id,
+                ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_polls=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True,
+                    can_invite_users=True,
+                    can_change_info=False,
+                    can_pin_messages=False,
+                )
+            )
+            print(f"🔊 JoinWait: Unmuted user {user_id} in chat {chat_id}")
+            return True
+        except Exception as e:
+            print(f"⚠️ JoinWait unmute failed for {user_id} in {chat_id}: {e}")
+            return False
+    
     def is_group_or_bot_admin(chat_id: int, user_id: int, member_obj=None) -> bool:
         if user_id in ADMIN_IDS:
             return True
@@ -4345,7 +4390,7 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.regex(r"^/removejoinwait(?:@[A-Za-z0-9_]+)?(?:\s|$)") & GROUP_CHAT)
     async def removejoinwait_handler(client, message):
-        """Remove join wait restriction"""
+        """Remove join wait restriction and unmute all restricted users"""
         global new_member_wait_config
         
         chat_id = message.chat.id
@@ -4375,6 +4420,19 @@ def register_bot_handlers():
             await _safe_group_reply(client, message, "❌ Only admins can use this command!")
             return
         
+        # Unmute all users who were muted due to joinwait
+        if joinwait_invites_col is not None:
+            muted_users = list(joinwait_invites_col.find({"chat_id": chat_id}))
+            unmute_count = 0
+            for doc in muted_users:
+                muted_user_id = doc.get("user_id")
+                if muted_user_id:
+                    try:
+                        await unmute_user_for_joinwait(client, chat_id, muted_user_id)
+                        unmute_count += 1
+                    except Exception as e:
+                        print(f"Failed to unmute {muted_user_id}: {e}")
+        
         # Disable
         if chat_id in new_member_wait_config:
             new_member_wait_config[chat_id]["enabled"] = False
@@ -4385,7 +4443,7 @@ def register_bot_handlers():
         if new_member_wait_col is not None:
             new_member_wait_col.delete_one({"chat_id": chat_id})
         
-        await _safe_group_reply(client, message, "🔴 **Join Wait Disabled!**\n\nAll users can now send messages freely.")
+        await _safe_group_reply(client, message, "🔴 **Join Wait Disabled!**\n\n✅ All muted users have been unmuted.\n🔓 Everyone can now send messages freely.")
     
     @bot_client.on_message(filters.regex(r"^/joinwaitstatus(?:@[A-Za-z0-9_]+)?(?:\s|$)") & GROUP_CHAT)
     async def joinwaitstatus_handler(client, message):
@@ -4426,7 +4484,8 @@ def register_bot_handlers():
     
     @bot_client.on_message(filters.new_chat_members)
     async def new_member_handler(client, message):
-        """Track who added new members (used for join-wait feature)."""
+        """Track who added new members (used for join-wait feature). 
+        Also mutes new joiners and unmutes inviters when they reach target."""
         global new_member_wait_config
         
         chat_id = message.chat.id
@@ -4439,6 +4498,77 @@ def register_bot_handlers():
         config = new_member_wait_config.get(chat_id, {})
         if not config.get("enabled"):
             return
+        
+        required = int(config.get("required_adds", 3))
+        
+        # Mute new members who join (not bots, not admins)
+        for new_member in (message.new_chat_members or []):
+            if not new_member or new_member.is_bot:
+                continue
+            
+            new_user_id = new_member.id
+            
+            # Skip if already has enough adds (returning member)
+            existing_count = get_user_added_count(chat_id, new_user_id)
+            if existing_count >= required:
+                continue
+            
+            # Skip if user is admin
+            try:
+                if await is_group_admin_cached(client, chat_id, new_user_id):
+                    continue
+            except Exception:
+                pass
+            
+            # Skip if user is bot admin
+            if new_user_id in ADMIN_IDS:
+                continue
+            
+            # Mute the new user immediately
+            await mute_user_for_joinwait(client, chat_id, new_user_id)
+            
+            # Send welcome/restriction message
+            async def _send_joinwait_welcome(uid=new_user_id, uname=new_member.first_name):
+                try:
+                    user_mention = f"[{uname}](tg://user?id={uid})"
+                    
+                    # Get invite link
+                    try:
+                        chat_info = await client.get_chat(chat_id)
+                        invite_link = chat_info.invite_link
+                        if not invite_link:
+                            invite_link = (await client.create_chat_invite_link(chat_id)).invite_link
+                    except Exception:
+                        invite_link = None
+                    
+                    buttons = []
+                    if invite_link:
+                        buttons.append([
+                            InlineKeyboardButton(
+                                "👥 Add Member",
+                                url=f"https://t.me/share/url?url={invite_link}&text=Join%20our%20group!",
+                            )
+                        ])
+                    buttons.append([
+                        InlineKeyboardButton(
+                            "📊 How many users have I added?",
+                            callback_data=f"joinwait_check_{chat_id}_{uid}",
+                        )
+                    ])
+                    
+                    welcome_msg = await client.send_message(
+                        chat_id,
+                        f"👋 **Welcome** {user_mention}!\n\n"
+                        f"🔒 You are **muted** until you add **{required}** members to this group.\n\n"
+                        f"👥 Your Progress: **0/{required}**\n"
+                        f"⏰ Add {required} members to unlock messaging!",
+                        reply_markup=InlineKeyboardMarkup(buttons),
+                    )
+                    asyncio.create_task(auto_delete_message(welcome_msg, 30))
+                except Exception as e:
+                    print(f"Failed to send joinwait welcome: {e}")
+            
+            asyncio.create_task(_send_joinwait_welcome())
         
         if not inviter_id:
             return
@@ -4456,7 +4586,27 @@ def register_bot_handlers():
         if credited <= 0:
             return
         
-        increment_user_added_count(chat_id, inviter_id, credited)
+        # Increment the inviter's count
+        old_count = get_user_added_count(chat_id, inviter_id)
+        new_count = increment_user_added_count(chat_id, inviter_id, credited)
+        
+        # Check if inviter has now reached the required count -> unmute them
+        if old_count < required and new_count >= required:
+            await unmute_user_for_joinwait(client, chat_id, inviter_id)
+            
+            # Notify the user they're unmuted
+            try:
+                inviter = message.from_user
+                inviter_mention = f"[{inviter.first_name}](tg://user?id={inviter_id})"
+                unlock_msg = await client.send_message(
+                    chat_id,
+                    f"🎉 **Congratulations** {inviter_mention}!\n\n"
+                    f"✅ You have added **{new_count}** members!\n"
+                    f"🔓 You are now **unmuted** and can send messages freely!",
+                )
+                asyncio.create_task(auto_delete_message(unlock_msg, 15))
+            except Exception as e:
+                print(f"Failed to send unmute notification: {e}")
     
     # ============ NEW MEMBER MESSAGE FILTER ============
 
@@ -4498,7 +4648,7 @@ def register_bot_handlers():
         group=-999,
     )
     async def new_member_wait_filter(client, message):
-        """Block messages from ALL users until join count is met - instant delete"""
+        """Block messages from ALL users until join count is met - mute user and delete message"""
         global new_member_wait_config
 
         chat_id = message.chat.id
@@ -4537,12 +4687,15 @@ def register_bot_handlers():
         if current >= required:
             return
         
-        # User hasn't added enough members yet - delete as fast as possible
+        # User hasn't added enough members yet - mute them and delete message
         try:
             # ULTRA FAST PATH: fire-and-forget delete, don't wait
             asyncio.create_task(message.delete())
         except Exception as e:
             print(f"JoinWait delete failed: {e}")
+
+        # Also mute the user to prevent further messages (and block other bots from responding)
+        asyncio.create_task(mute_user_for_joinwait(client, chat_id, user_id))
 
         # Stop other handlers immediately (reduces extra processing)
         try:
@@ -4583,9 +4736,9 @@ def register_bot_handlers():
 
                 notify_msg = await client.send_message(
                     chat_id,
-                    f"⬜ **Add member**\n"
+                    f"🔇 **You are muted!**\n"
                     f"👈 Dear {user_mention}\n"
-                    f"user, you need to add **{required}** of your contacts to the group then you can send message!\n\n"
+                    f"You need to add **{required}** members to the group to unlock messaging!\n\n"
                     f"👥 Your Progress: **{current}/{required}**\n"
                     f"⏰ Remaining: **{remaining}**",
                     reply_markup=InlineKeyboardMarkup(buttons),
