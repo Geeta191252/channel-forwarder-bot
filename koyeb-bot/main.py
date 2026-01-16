@@ -4228,8 +4228,11 @@ def register_bot_handlers():
                     joinwait_invites_cache.pop(k, None)
     
     async def mute_user_for_joinwait(client, chat_id: int, user_id: int):
-        """Mute/restrict a user so they cannot send any messages (blocks all bots from responding)."""
+        """Mute/restrict a user for 1 minute so they cannot send any messages (blocks all bots from responding)."""
         try:
+            from datetime import datetime, timedelta
+            # Mute for 1 minute only
+            until_time = datetime.now() + timedelta(minutes=1)
             await client.restrict_chat_member(
                 chat_id,
                 user_id,
@@ -4240,9 +4243,10 @@ def register_bot_handlers():
                     can_send_other_messages=False,
                     can_add_web_page_previews=False,
                     can_invite_users=True,  # Allow inviting so they can add members
-                )
+                ),
+                until_date=until_time
             )
-            print(f"🔇 JoinWait: Muted user {user_id} in chat {chat_id}")
+            print(f"🔇 JoinWait: Muted user {user_id} in chat {chat_id} for 1 minute")
             return True
         except Exception as e:
             print(f"⚠️ JoinWait mute failed for {user_id} in {chat_id}: {e}")
