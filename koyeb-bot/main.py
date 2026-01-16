@@ -4687,17 +4687,17 @@ def register_bot_handlers():
         if current >= required:
             return
         
-        # User hasn't added enough members yet - mute them and delete message
+        # User hasn't added enough members yet - DELETE IMMEDIATELY (await) so other bots can't see it
         try:
-            # ULTRA FAST PATH: fire-and-forget delete, don't wait
-            asyncio.create_task(message.delete())
+            # CRITICAL: Must await delete so message is gone BEFORE other bots can process it
+            await message.delete()
         except Exception as e:
             print(f"JoinWait delete failed: {e}")
 
-        # Also mute the user to prevent further messages (and block other bots from responding)
+        # Also mute the user to prevent future messages
         asyncio.create_task(mute_user_for_joinwait(client, chat_id, user_id))
 
-        # Stop other handlers immediately (reduces extra processing)
+        # Stop propagation (though other bots won't see deleted message anyway)
         try:
             message.stop_propagation()
         except Exception:
