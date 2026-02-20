@@ -5,6 +5,7 @@ import { StatusCard } from "@/components/StatusCard";
 import { BulkForward } from "@/components/BulkForward";
 import { ForceJoin } from "@/components/ForceJoin";
 import { AdminGroups } from "@/components/AdminGroups";
+import { ModerationCommands } from "@/components/ModerationCommands";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -112,6 +113,7 @@ const Index = () => {
           <AdminGroups botApiUrl={botApiUrl} />
 
           <ForceJoin />
+          <ModerationCommands />
         </div>
 
         <footer className="mt-8 text-center text-sm text-muted-foreground">
