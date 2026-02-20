@@ -2458,13 +2458,11 @@ def register_bot_handlers():
         # User passed all checks - show main menu
         await show_main_menu(client, message)
 
-    async def show_main_menu(client, message):
-        """Show main menu to user"""
+    def get_settings_keyboard(user_id=None):
+        """Get the full settings keyboard"""
         num_accounts = len(user_clients)
         expected_speed = num_accounts * 30 if num_accounts else 0
-        
-        # Inline keyboard buttons
-        keyboard = InlineKeyboardMarkup([
+        return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📤 Forward", callback_data="forward"),
                 InlineKeyboardButton("📢 Channel", callback_data="channel")
@@ -2483,22 +2481,45 @@ def register_bot_handlers():
             ],
             [
                 InlineKeyboardButton("❓ Help", callback_data="help")
+            ],
+            [
+                InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
             ]
         ])
+
+    async def show_main_menu(client, message):
+        """Show welcome message with Add to Group + Manage Settings buttons"""
+        try:
+            bot_info = await client.get_me()
+            bot_username = bot_info.username or ""
+        except Exception:
+            bot_username = ""
+
+        add_group_url = f"https://t.me/{bot_username}?startgroup=true" if bot_username else ""
         
-        # Only show account info to admins
-        if message.from_user.id in ADMIN_IDS:
-            msg_text = (
-                f"🚀 **Telegram Forwarder Bot (Multi-Account MTProto)**\n\n"
-                f"👥 Active accounts: {num_accounts}\n"
-                f"⚡ Expected speed: ~{expected_speed}/min\n\n"
-                f"Select an option below or use commands:"
-            )
-        else:
-            msg_text = (
-                f"🚀 **Telegram Forwarder Bot**\n\n"
-                f"Select an option below or use commands:"
-            )
+        keyboard_buttons = []
+        if add_group_url:
+            keyboard_buttons.append([InlineKeyboardButton("➕ Add me to a Group ➕", url=add_group_url)])
+        keyboard_buttons.append([InlineKeyboardButton("⚙️ Manage Group Settings ✍️", callback_data="manage_settings")])
+        keyboard_buttons.append([
+            InlineKeyboardButton("👥 Group", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me"),
+            InlineKeyboardButton("📢 Channel", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me")
+        ])
+        keyboard_buttons.append([
+            InlineKeyboardButton("🆘 Support", callback_data="support_info"),
+            InlineKeyboardButton("💬 Information", callback_data="bot_info")
+        ])
+        keyboard_buttons.append([InlineKeyboardButton("❓ Help", callback_data="help")])
+        
+        keyboard = InlineKeyboardMarkup(keyboard_buttons)
+        
+        msg_text = (
+            f"👋 **Hello!**\n"
+            f"**Group Help** is **the most complete** Bot to help you **manage** your groups easily and **safely**!\n\n"
+            f"👉 **Add me in a Supergroup** and promote me as **Admin** to let me get in action!\n\n"
+            f"❓ **WHICH ARE THE COMMANDS?** ❓\n"
+            f"Press /help to see **all the commands** and how they work!"
+        )
         
         await message.reply(msg_text, reply_markup=keyboard)
     
@@ -2600,6 +2621,83 @@ def register_bot_handlers():
     async def callback_handler(client, callback_query):
         data = callback_query.data
         
+        # Handle "Manage Group Settings" button
+        if data == "manage_settings":
+            user_id = callback_query.from_user.id
+            num_accounts = len(user_clients)
+            expected_speed = num_accounts * 30 if num_accounts else 0
+            
+            if user_id in ADMIN_IDS:
+                msg_text = (
+                    f"⚙️ **Group Settings**\n\n"
+                    f"👥 Active accounts: {num_accounts}\n"
+                    f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                    f"Select an option below:"
+                )
+            else:
+                msg_text = (
+                    f"⚙️ **Group Settings**\n\n"
+                    f"Select an option below:"
+                )
+            
+            await safe_edit_message(
+                callback_query.message,
+                msg_text,
+                reply_markup=get_settings_keyboard(user_id)
+            )
+            await callback_query.answer()
+            return
+        
+        # Handle "Back to Start" button
+        if data == "back_to_start":
+            try:
+                bot_info = await client.get_me()
+                bot_username = bot_info.username or ""
+            except Exception:
+                bot_username = ""
+
+            add_group_url = f"https://t.me/{bot_username}?startgroup=true" if bot_username else ""
+            
+            keyboard_buttons = []
+            if add_group_url:
+                keyboard_buttons.append([InlineKeyboardButton("➕ Add me to a Group ➕", url=add_group_url)])
+            keyboard_buttons.append([InlineKeyboardButton("⚙️ Manage Group Settings ✍️", callback_data="manage_settings")])
+            keyboard_buttons.append([
+                InlineKeyboardButton("👥 Group", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me"),
+                InlineKeyboardButton("📢 Channel", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me")
+            ])
+            keyboard_buttons.append([
+                InlineKeyboardButton("🆘 Support", callback_data="support_info"),
+                InlineKeyboardButton("💬 Information", callback_data="bot_info")
+            ])
+            keyboard_buttons.append([InlineKeyboardButton("❓ Help", callback_data="help")])
+            
+            msg_text = (
+                f"👋 **Hello!**\n"
+                f"**Group Help** is **the most complete** Bot to help you **manage** your groups easily and **safely**!\n\n"
+                f"👉 **Add me in a Supergroup** and promote me as **Admin** to let me get in action!\n\n"
+                f"❓ **WHICH ARE THE COMMANDS?** ❓\n"
+                f"Press /help to see **all the commands** and how they work!"
+            )
+            
+            await safe_edit_message(
+                callback_query.message,
+                msg_text,
+                reply_markup=InlineKeyboardMarkup(keyboard_buttons)
+            )
+            await callback_query.answer()
+            return
+        
+        # Handle support info
+        if data == "support_info":
+            await callback_query.answer("🆘 Support: Contact @YourSupportUsername for help!", show_alert=True)
+            return
+        
+        # Handle bot info
+        if data == "bot_info":
+            await callback_query.answer("💬 This bot helps you manage Telegram groups with moderation, forwarding, and more!", show_alert=True)
+            return
+        
         # Handle force subscribe verification
         if data == "check_joined":
             user_id = callback_query.from_user.id
@@ -2608,46 +2706,13 @@ def register_bot_handlers():
             if is_joined:
                 # Check if admin (bypass referral)
                 if is_admin(user_id):
-                    num_accounts = len(user_clients)
-                    expected_speed = num_accounts * 30 if num_accounts else 0
+                    keyboard = get_settings_keyboard(user_id)
                     
-                    keyboard = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton("📤 Forward", callback_data="forward"),
-                            InlineKeyboardButton("📢 Channel", callback_data="channel")
-                        ],
-                        [
-                            InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
-                            InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
-                        ],
-                        [
-                            InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
-                            InlineKeyboardButton("📥 Join Request", callback_data="join_request")
-                        ],
-                        [
-                            InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
-                            InlineKeyboardButton("👥 Referral", callback_data="my_referral")
-                        ],
-                        [
-                            InlineKeyboardButton("❓ Help", callback_data="help")
-                        ]
-                    ])
-                    
-                    # Only show account info to admins
-                    if user_id in ADMIN_IDS:
-                        msg_text = (
-                            f"✅ **Verification Successful!**\n\n"
-                            f"🚀 **Telegram Forwarder Bot**\n\n"
-                            f"👥 Active accounts: {num_accounts}\n"
-                            f"⚡ Expected speed: ~{expected_speed}/min\n\n"
-                            f"Select an option below:"
-                        )
-                    else:
-                        msg_text = (
-                            f"✅ **Verification Successful!**\n\n"
-                            f"🚀 **Telegram Forwarder Bot**\n\n"
-                            f"Select an option below:"
-                        )
+                    msg_text = (
+                        f"✅ **Verification Successful!**\n\n"
+                        f"⚙️ **Group Settings**\n\n"
+                        f"Select an option below:"
+                    )
                     
                     await safe_edit_message(
                         callback_query.message,
@@ -2680,47 +2745,13 @@ def register_bot_handlers():
                     await callback_query.answer()
                     return
                 
-                # User passed all checks - show main menu
-                num_accounts = len(user_clients)
-                expected_speed = num_accounts * 30 if num_accounts else 0
-                
-                keyboard = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("📤 Forward", callback_data="forward"),
-                        InlineKeyboardButton("📢 Channel", callback_data="channel")
-                    ],
-                    [
-                        InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
-                        InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
-                    ],
-                    [
-                        InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
-                        InlineKeyboardButton("📥 Join Request", callback_data="join_request")
-                    ],
-                    [
-                        InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
-                        InlineKeyboardButton("👥 Referral", callback_data="my_referral")
-                    ],
-                    [
-                        InlineKeyboardButton("❓ Help", callback_data="help")
-                    ]
-                ])
-                
-                # Only show account info to admins
-                if user_id in ADMIN_IDS:
-                    msg_text = (
-                        f"✅ **Verification Successful!**\n\n"
-                        f"🚀 **Telegram Forwarder Bot**\n\n"
-                        f"👥 Active accounts: {num_accounts}\n"
-                        f"⚡ Expected speed: ~{expected_speed}/min\n\n"
-                        f"Select an option below:"
-                    )
-                else:
-                    msg_text = (
-                        f"✅ **Verification Successful!**\n\n"
-                        f"🚀 **Telegram Forwarder Bot**\n\n"
-                        f"Select an option below:"
-                    )
+                # User passed all checks - show settings menu
+                keyboard = get_settings_keyboard(user_id)
+                msg_text = (
+                    f"✅ **Verification Successful!**\n\n"
+                    f"⚙️ **Group Settings**\n\n"
+                    f"Select an option below:"
+                )
                 
                 await safe_edit_message(
                     callback_query.message,
@@ -2752,37 +2783,11 @@ def register_bot_handlers():
             
             # Check if admin
             if is_admin(user_id):
-                num_accounts = len(user_clients)
-                expected_speed = num_accounts * 30 if num_accounts else 0
-                
-                keyboard = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("📤 Forward", callback_data="forward"),
-                        InlineKeyboardButton("📢 Channel", callback_data="channel")
-                    ],
-                    [
-                        InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
-                        InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
-                    ],
-                    [
-                        InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
-                        InlineKeyboardButton("📥 Join Request", callback_data="join_request")
-                    ],
-                    [
-                        InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
-                        InlineKeyboardButton("👥 Referral", callback_data="my_referral")
-                    ],
-                    [
-                        InlineKeyboardButton("❓ Help", callback_data="help")
-                    ]
-                ])
-                
+                keyboard = get_settings_keyboard(user_id)
                 await safe_edit_message(
                     callback_query.message,
                     f"✅ **Admin Access!**\n\n"
-                    f"🚀 **Telegram Forwarder Bot**\n\n"
-                    f"👥 Active accounts: {num_accounts}\n"
-                    f"⚡ Expected speed: ~{expected_speed}/min\n\n"
+                    f"⚙️ **Group Settings**\n\n"
                     f"Select an option below:",
                     reply_markup=keyboard
                 )
@@ -2792,37 +2797,11 @@ def register_bot_handlers():
             ref_count = get_referral_count(user_id)
             
             if ref_count >= REQUIRED_REFERRALS:
-                # User has enough referrals - show main menu
-                num_accounts = len(user_clients)
-                expected_speed = num_accounts * 30 if num_accounts else 0
-                
-                keyboard = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("📤 Forward", callback_data="forward"),
-                        InlineKeyboardButton("📢 Channel", callback_data="channel")
-                    ],
-                    [
-                        InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
-                        InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
-                    ],
-                    [
-                        InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
-                        InlineKeyboardButton("📥 Join Request", callback_data="join_request")
-                    ],
-                    [
-                        InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
-                        InlineKeyboardButton("👥 Referral", callback_data="my_referral")
-                    ],
-                    [
-                        InlineKeyboardButton("❓ Help", callback_data="help")
-                    ]
-                ])
-                
-                # Only show account info to admins (referral complete users are not admins)
+                keyboard = get_settings_keyboard(user_id)
                 await safe_edit_message(
                     callback_query.message,
                     f"✅ **Referral Complete!**\n\n"
-                    f"🚀 **Telegram Forwarder Bot**\n\n"
+                    f"⚙️ **Group Settings**\n\n"
                     f"Select an option below:",
                     reply_markup=keyboard
                 )
