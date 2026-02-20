@@ -2624,19 +2624,58 @@ def register_bot_handlers():
         # Handle "Manage Group Settings" button
         if data == "manage_settings":
             user_id = callback_query.from_user.id
+            
+            # Fetch all admin groups from database
+            admin_groups = []
+            if admin_groups_col is not None:
+                try:
+                    admin_groups = list(admin_groups_col.find({}).sort("updated_at", -1))
+                except Exception as e:
+                    print(f"❌ Error fetching admin groups: {e}", flush=True)
+            
+            # Build group list text
+            if admin_groups:
+                groups_text = "📋 **Your Groups:**\n\n"
+                for idx, grp in enumerate(admin_groups, 1):
+                    title = grp.get("title") or grp.get("chat_title") or "Unknown"
+                    chat_id = grp.get("chat_id", "")
+                    member_count = grp.get("member_count", 0)
+                    # Build clickable link
+                    link = None
+                    username = grp.get("username")
+                    invite = grp.get("invite_link")
+                    if username:
+                        link = f"https://t.me/{username}"
+                    elif invite:
+                        link = invite
+                    
+                    if link:
+                        groups_text += f"{idx}. [{title}]({link})"
+                    else:
+                        groups_text += f"{idx}. **{title}**"
+                    if member_count:
+                        groups_text += f" — 👥 {member_count}"
+                    groups_text += "\n"
+                
+                groups_text += f"\n📊 **Total Groups: {len(admin_groups)}**\n"
+            else:
+                groups_text = "📋 **No groups found!**\nAdd me to a group and make me admin.\n"
+            
             num_accounts = len(user_clients)
             expected_speed = num_accounts * 30 if num_accounts else 0
             
             if user_id in ADMIN_IDS:
                 msg_text = (
-                    f"⚙️ **Group Settings**\n\n"
+                    f"⚙️ **Manage Group Settings**\n\n"
+                    f"{groups_text}\n"
                     f"👥 Active accounts: {num_accounts}\n"
                     f"⚡ Expected speed: ~{expected_speed}/min\n\n"
                     f"Select an option below:"
                 )
             else:
                 msg_text = (
-                    f"⚙️ **Group Settings**\n\n"
+                    f"⚙️ **Manage Group Settings**\n\n"
+                    f"{groups_text}\n"
                     f"Select an option below:"
                 )
             
