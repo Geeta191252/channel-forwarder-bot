@@ -372,10 +372,13 @@ def load_moderation_config(chat_id):
                 "block_links": saved.get("block_links", False),
                 "block_badwords": saved.get("block_badwords", False),
                 "block_mentions": saved.get("block_mentions", False),
-                "auto_delete_2min": saved.get("auto_delete_2min", False)
+                "auto_delete_2min": saved.get("auto_delete_2min", False),
+                "bf_punishment": saved.get("bf_punishment", "mute"),
+                "bl_punishment": saved.get("bl_punishment", "mute"),
+                "bbw_punishment": saved.get("bbw_punishment", "mute"),
             }
             return moderation_config[chat_id]
-    return {"enabled": False, "block_forward": False, "block_links": False, "block_badwords": False, "block_mentions": False, "auto_delete_2min": False}
+    return {"enabled": False, "block_forward": False, "block_links": False, "block_badwords": False, "block_mentions": False, "auto_delete_2min": False, "bf_punishment": "mute", "bl_punishment": "mute", "bbw_punishment": "mute"}
 
 
 def save_moderation_config(chat_id):
@@ -3150,16 +3153,27 @@ def register_bot_handlers():
                 mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
                 status = mc.get("block_forward", False)
                 status_text = "✅ Enabled" if status else "❌ Disabled"
+                bf_p = mc.get("bf_punishment", "mute")
+                def bf_label(key, emoji, lbl):
+                    return f"{emoji} {lbl} ✅" if bf_p == key else f"{emoji} {lbl}"
                 text = (
                     "🚫 <b>Block Forward</b>\n\n"
                     "When enabled, all forwarded messages from other channels/groups will be <b>automatically deleted</b>.\n\n"
-                    "This prevents users from spamming forwarded content in your group.\n\n"
-                    f"<b>Current Status:</b> {status_text}"
+                    f"<b>Current Status:</b> {status_text}\n"
+                    f"<b>Punishment:</b> {bf_p.title()}"
                 )
                 keyboard = [
                     [
                         InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockforward_on"),
                         InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockforward_off"),
+                    ],
+                    [
+                        InlineKeyboardButton(bf_label("off", "✖", "Off"), callback_data="bf_p_off"),
+                        InlineKeyboardButton(bf_label("kick", "❗", "Kick"), callback_data="bf_p_kick"),
+                    ],
+                    [
+                        InlineKeyboardButton(bf_label("mute", "🔇", "Mute"), callback_data="bf_p_mute"),
+                        InlineKeyboardButton(bf_label("ban", "🚫", "Ban"), callback_data="bf_p_ban"),
                     ],
                     [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
                 ]
@@ -3171,16 +3185,27 @@ def register_bot_handlers():
                 mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
                 status = mc.get("block_links", False)
                 status_text = "✅ Enabled" if status else "❌ Disabled"
+                bl_p = mc.get("bl_punishment", "mute")
+                def bl_label(key, emoji, lbl):
+                    return f"{emoji} {lbl} ✅" if bl_p == key else f"{emoji} {lbl}"
                 text = (
                     "🔗 <b>Block Links</b>\n\n"
                     "When enabled, messages containing <b>URLs, Telegram links</b> (t.me) will be <b>automatically deleted</b>.\n\n"
-                    "This prevents users from posting promotional or spam links.\n\n"
-                    f"<b>Current Status:</b> {status_text}"
+                    f"<b>Current Status:</b> {status_text}\n"
+                    f"<b>Punishment:</b> {bl_p.title()}"
                 )
                 keyboard = [
                     [
                         InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blocklinks_on"),
                         InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blocklinks_off"),
+                    ],
+                    [
+                        InlineKeyboardButton(bl_label("off", "✖", "Off"), callback_data="bl_p_off"),
+                        InlineKeyboardButton(bl_label("kick", "❗", "Kick"), callback_data="bl_p_kick"),
+                    ],
+                    [
+                        InlineKeyboardButton(bl_label("mute", "🔇", "Mute"), callback_data="bl_p_mute"),
+                        InlineKeyboardButton(bl_label("ban", "🚫", "Ban"), callback_data="bl_p_ban"),
                     ],
                     [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
                 ]
@@ -3192,15 +3217,27 @@ def register_bot_handlers():
                 mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
                 status = mc.get("block_badwords", False)
                 status_text = "✅ Enabled" if status else "❌ Disabled"
+                bbw_p = mc.get("bbw_punishment", "mute")
+                def bbw_label(key, emoji, lbl):
+                    return f"{emoji} {lbl} ✅" if bbw_p == key else f"{emoji} {lbl}"
                 text = (
                     "🔞 <b>Block Bad Words</b>\n\n"
-                    "When enabled, messages containing <b>inappropriate/abusive words</b> (Hindi + English) will be <b>automatically deleted</b> and the user will receive a warning.\n\n"
-                    f"<b>Current Status:</b> {status_text}"
+                    "When enabled, messages containing <b>inappropriate/abusive words</b> (Hindi + English) will be <b>automatically deleted</b>.\n\n"
+                    f"<b>Current Status:</b> {status_text}\n"
+                    f"<b>Punishment:</b> {bbw_p.title()}"
                 )
                 keyboard = [
                     [
                         InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockbadwords_on"),
                         InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockbadwords_off"),
+                    ],
+                    [
+                        InlineKeyboardButton(bbw_label("off", "✖", "Off"), callback_data="bbw_p_off"),
+                        InlineKeyboardButton(bbw_label("kick", "❗", "Kick"), callback_data="bbw_p_kick"),
+                    ],
+                    [
+                        InlineKeyboardButton(bbw_label("mute", "🔇", "Mute"), callback_data="bbw_p_mute"),
+                        InlineKeyboardButton(bbw_label("ban", "🚫", "Ban"), callback_data="bbw_p_ban"),
                     ],
                     [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
                 ]
@@ -3393,20 +3430,31 @@ def register_bot_handlers():
             moderation_config[chat_id] = mc
             save_moderation_config(chat_id)
             await callback_query.answer(f"{'✅ Block Forward Enabled!' if enable else '❌ Block Forward Disabled!'}", show_alert=True)
-            # Re-render
+            # Re-render with punishment buttons
             callback_query.data = "mod_cmd_blockforward"
             status = mc.get("block_forward", False)
             status_text = "✅ Enabled" if status else "❌ Disabled"
+            bf_p = mc.get("bf_punishment", "mute")
+            def bf_label2(key, emoji, lbl):
+                return f"{emoji} {lbl} ✅" if bf_p == key else f"{emoji} {lbl}"
             text = (
                 "🚫 <b>Block Forward</b>\n\n"
                 "When enabled, all forwarded messages from other channels/groups will be <b>automatically deleted</b>.\n\n"
-                "This prevents users from spamming forwarded content in your group.\n\n"
-                f"<b>Current Status:</b> {status_text}"
+                f"<b>Current Status:</b> {status_text}\n"
+                f"<b>Punishment:</b> {bf_p.title()}"
             )
             keyboard = [
                 [
                     InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockforward_on"),
                     InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockforward_off"),
+                ],
+                [
+                    InlineKeyboardButton(bf_label2("off", "✖", "Off"), callback_data="bf_p_off"),
+                    InlineKeyboardButton(bf_label2("kick", "❗", "Kick"), callback_data="bf_p_kick"),
+                ],
+                [
+                    InlineKeyboardButton(bf_label2("mute", "🔇", "Mute"), callback_data="bf_p_mute"),
+                    InlineKeyboardButton(bf_label2("ban", "🚫", "Ban"), callback_data="bf_p_ban"),
                 ],
                 [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
             ]
@@ -3424,16 +3472,27 @@ def register_bot_handlers():
             await callback_query.answer(f"{'✅ Block Links Enabled!' if enable else '❌ Block Links Disabled!'}", show_alert=True)
             status = mc.get("block_links", False)
             status_text = "✅ Enabled" if status else "❌ Disabled"
+            bl_p = mc.get("bl_punishment", "mute")
+            def bl_label2(key, emoji, lbl):
+                return f"{emoji} {lbl} ✅" if bl_p == key else f"{emoji} {lbl}"
             text = (
                 "🔗 <b>Block Links</b>\n\n"
                 "When enabled, messages containing <b>URLs, Telegram links</b> (t.me) will be <b>automatically deleted</b>.\n\n"
-                "This prevents users from posting promotional or spam links.\n\n"
-                f"<b>Current Status:</b> {status_text}"
+                f"<b>Current Status:</b> {status_text}\n"
+                f"<b>Punishment:</b> {bl_p.title()}"
             )
             keyboard = [
                 [
                     InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blocklinks_on"),
                     InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blocklinks_off"),
+                ],
+                [
+                    InlineKeyboardButton(bl_label2("off", "✖", "Off"), callback_data="bl_p_off"),
+                    InlineKeyboardButton(bl_label2("kick", "❗", "Kick"), callback_data="bl_p_kick"),
+                ],
+                [
+                    InlineKeyboardButton(bl_label2("mute", "🔇", "Mute"), callback_data="bl_p_mute"),
+                    InlineKeyboardButton(bl_label2("ban", "🚫", "Ban"), callback_data="bl_p_ban"),
                 ],
                 [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
             ]
@@ -3451,19 +3510,122 @@ def register_bot_handlers():
             await callback_query.answer(f"{'✅ Block Bad Words Enabled!' if enable else '❌ Block Bad Words Disabled!'}", show_alert=True)
             status = mc.get("block_badwords", False)
             status_text = "✅ Enabled" if status else "❌ Disabled"
+            bbw_p = mc.get("bbw_punishment", "mute")
+            def bbw_label2(key, emoji, lbl):
+                return f"{emoji} {lbl} ✅" if bbw_p == key else f"{emoji} {lbl}"
             text = (
                 "🔞 <b>Block Bad Words</b>\n\n"
-                "When enabled, messages containing <b>inappropriate/abusive words</b> (Hindi + English) will be <b>automatically deleted</b> and the user will receive a warning.\n\n"
-                f"<b>Current Status:</b> {status_text}"
+                "When enabled, messages containing <b>inappropriate/abusive words</b> (Hindi + English) will be <b>automatically deleted</b>.\n\n"
+                f"<b>Current Status:</b> {status_text}\n"
+                f"<b>Punishment:</b> {bbw_p.title()}"
             )
             keyboard = [
                 [
                     InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockbadwords_on"),
                     InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockbadwords_off"),
                 ],
+                [
+                    InlineKeyboardButton(bbw_label2("off", "✖", "Off"), callback_data="bbw_p_off"),
+                    InlineKeyboardButton(bbw_label2("kick", "❗", "Kick"), callback_data="bbw_p_kick"),
+                ],
+                [
+                    InlineKeyboardButton(bbw_label2("mute", "🔇", "Mute"), callback_data="bbw_p_mute"),
+                    InlineKeyboardButton(bbw_label2("ban", "🚫", "Ban"), callback_data="bbw_p_ban"),
+                ],
                 [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
             ]
             await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+
+        # Per-feature punishment handlers
+        elif data.startswith("bf_p_") or data.startswith("bl_p_") or data.startswith("bbw_p_"):
+            try:
+                chat_id = callback_query.message.chat.id
+                mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+                if data.startswith("bf_p_"):
+                    p_type = data.replace("bf_p_", "")
+                    config_key = "bf_punishment"
+                    re_render = "mod_cmd_blockforward"
+                    feature_name = "Block Forward"
+                elif data.startswith("bl_p_"):
+                    p_type = data.replace("bl_p_", "")
+                    config_key = "bl_punishment"
+                    re_render = "mod_cmd_blocklinks"
+                    feature_name = "Block Links"
+                else:
+                    p_type = data.replace("bbw_p_", "")
+                    config_key = "bbw_punishment"
+                    re_render = "mod_cmd_blockbadwords"
+                    feature_name = "Block Bad Words"
+                
+                if p_type in ("off", "kick", "mute", "ban"):
+                    mc[config_key] = p_type
+                    moderation_config[chat_id] = mc
+                    save_moderation_config(chat_id)
+                    await callback_query.answer(f"✅ {feature_name} punishment: {p_type.title()}", show_alert=True)
+                    # Re-render the submenu
+                    callback_query.data = re_render
+                    # Trigger re-render by calling handler logic inline
+                    # We just re-set data and let it fall through next time; for now, re-build inline
+                    if re_render == "mod_cmd_blockforward":
+                        status = mc.get("block_forward", False)
+                        status_text = "✅ Enabled" if status else "❌ Disabled"
+                        bf_p = mc.get("bf_punishment", "mute")
+                        def bf_lbl(key, emoji, lbl):
+                            return f"{emoji} {lbl} ✅" if bf_p == key else f"{emoji} {lbl}"
+                        text = (
+                            "🚫 <b>Block Forward</b>\n\n"
+                            "When enabled, all forwarded messages from other channels/groups will be <b>automatically deleted</b>.\n\n"
+                            f"<b>Current Status:</b> {status_text}\n"
+                            f"<b>Punishment:</b> {bf_p.title()}"
+                        )
+                        keyboard = [
+                            [InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockforward_on"), InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockforward_off")],
+                            [InlineKeyboardButton(bf_lbl("off", "✖", "Off"), callback_data="bf_p_off"), InlineKeyboardButton(bf_lbl("kick", "❗", "Kick"), callback_data="bf_p_kick")],
+                            [InlineKeyboardButton(bf_lbl("mute", "🔇", "Mute"), callback_data="bf_p_mute"), InlineKeyboardButton(bf_lbl("ban", "🚫", "Ban"), callback_data="bf_p_ban")],
+                            [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                        ]
+                    elif re_render == "mod_cmd_blocklinks":
+                        status = mc.get("block_links", False)
+                        status_text = "✅ Enabled" if status else "❌ Disabled"
+                        bl_p = mc.get("bl_punishment", "mute")
+                        def bl_lbl(key, emoji, lbl):
+                            return f"{emoji} {lbl} ✅" if bl_p == key else f"{emoji} {lbl}"
+                        text = (
+                            "🔗 <b>Block Links</b>\n\n"
+                            "When enabled, messages containing <b>URLs, Telegram links</b> (t.me) will be <b>automatically deleted</b>.\n\n"
+                            f"<b>Current Status:</b> {status_text}\n"
+                            f"<b>Punishment:</b> {bl_p.title()}"
+                        )
+                        keyboard = [
+                            [InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blocklinks_on"), InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blocklinks_off")],
+                            [InlineKeyboardButton(bl_lbl("off", "✖", "Off"), callback_data="bl_p_off"), InlineKeyboardButton(bl_lbl("kick", "❗", "Kick"), callback_data="bl_p_kick")],
+                            [InlineKeyboardButton(bl_lbl("mute", "🔇", "Mute"), callback_data="bl_p_mute"), InlineKeyboardButton(bl_lbl("ban", "🚫", "Ban"), callback_data="bl_p_ban")],
+                            [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                        ]
+                    else:
+                        status = mc.get("block_badwords", False)
+                        status_text = "✅ Enabled" if status else "❌ Disabled"
+                        bbw_p = mc.get("bbw_punishment", "mute")
+                        def bbw_lbl(key, emoji, lbl):
+                            return f"{emoji} {lbl} ✅" if bbw_p == key else f"{emoji} {lbl}"
+                        text = (
+                            "🔞 <b>Block Bad Words</b>\n\n"
+                            "When enabled, messages containing <b>inappropriate/abusive words</b> (Hindi + English) will be <b>automatically deleted</b>.\n\n"
+                            f"<b>Current Status:</b> {status_text}\n"
+                            f"<b>Punishment:</b> {bbw_p.title()}"
+                        )
+                        keyboard = [
+                            [InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockbadwords_on"), InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockbadwords_off")],
+                            [InlineKeyboardButton(bbw_lbl("off", "✖", "Off"), callback_data="bbw_p_off"), InlineKeyboardButton(bbw_lbl("kick", "❗", "Kick"), callback_data="bbw_p_kick")],
+                            [InlineKeyboardButton(bbw_lbl("mute", "🔇", "Mute"), callback_data="bbw_p_mute"), InlineKeyboardButton(bbw_lbl("ban", "🚫", "Ban"), callback_data="bbw_p_ban")],
+                            [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                        ]
+                    await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                else:
+                    await callback_query.answer(f"❌ Unknown punishment: {p_type}", show_alert=True)
+            except Exception as e:
+                print(f"[FEATURE_PUNISHMENT ERROR] {e}", flush=True)
+                await callback_query.answer(f"❌ Error: {e}", show_alert=True)
 
         elif data == "mod_reset_all_warnings":
             chat_id = callback_query.message.chat.id
@@ -6338,12 +6500,50 @@ def register_bot_handlers():
                 )
                 asyncio.create_task(auto_delete_message(warn_msg, 10))
         
+        async def apply_feature_punishment(feature_punishment, reason):
+            """Apply per-feature punishment (instant ban/kick/mute, no warning system)"""
+            if feature_punishment == "off":
+                return  # Just delete, no punishment
+            user_name = message.from_user.first_name
+            try:
+                if feature_punishment == "ban":
+                    await client.ban_chat_member(chat_id, user_id)
+                    moderation_stats["bans"] += 1
+                    action_text = "🚫 Banned"
+                elif feature_punishment == "kick":
+                    await client.ban_chat_member(chat_id, user_id)
+                    await client.unban_chat_member(chat_id, user_id)
+                    action_text = "👢 Kicked"
+                elif feature_punishment == "mute":
+                    from datetime import timedelta
+                    wc = get_warning_config(chat_id)
+                    mute_dur = wc.get("mute_duration", 3)
+                    until = datetime.utcnow() + timedelta(hours=mute_dur)
+                    await client.restrict_chat_member(
+                        chat_id, user_id,
+                        ChatPermissions(),
+                        until_date=until
+                    )
+                    action_text = f"🔇 Muted ({mute_dur}h)"
+                else:
+                    action_text = "⚠️ Punished"
+                p_msg = await client.send_message(
+                    chat_id,
+                    f"{action_text}: {user_name}\n"
+                    f"Reason: {reason}"
+                )
+                asyncio.create_task(auto_delete_message(p_msg, 10))
+                print(f"🔨 {action_text} {user_name} for {reason}")
+            except Exception as e:
+                print(f"Failed to punish user: {e}")
+
         try:
             # Check for forwarded messages
             if config.get("block_forward") and message.forward_date:
                 await message.delete()
                 moderation_stats["deleted_forward"] += 1
-                await add_warning_and_check_ban("Forwarded message")
+                bf_p = config.get("bf_punishment", "mute")
+                await apply_feature_punishment(bf_p, "Forwarded message")
                 return
             
             # Get message text
@@ -6353,14 +6553,16 @@ def register_bot_handlers():
             if config.get("block_links") and text and contains_link(text):
                 await message.delete()
                 moderation_stats["deleted_links"] += 1
-                await add_warning_and_check_ban("Link/URL not allowed")
+                bl_p = config.get("bl_punishment", "mute")
+                await apply_feature_punishment(bl_p, "Link/URL not allowed")
                 return
             
             # Check for bad words
             if config.get("block_badwords") and text and contains_bad_words(text):
                 await message.delete()
                 moderation_stats["deleted_badwords"] += 1
-                await add_warning_and_check_ban("Inappropriate/sexual content")
+                bbw_p = config.get("bbw_punishment", "mute")
+                await apply_feature_punishment(bbw_p, "Inappropriate/sexual content")
                 return
             
             # Check for @mentions
