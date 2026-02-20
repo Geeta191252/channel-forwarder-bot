@@ -5,8 +5,6 @@ import { Shield, ShieldOff, Ban, Link2Off, MessageSquareOff, Eye, AlertTriangle,
 import { toast } from "sonner";
 
 const commands = [
-  { id: "enablemod", command: "/enablemod", label: "Enable Mod", icon: Shield, color: "text-green-500", description: "Enable moderation" },
-  { id: "disablemod", command: "/disablemod", label: "Disable Mod", icon: ShieldOff, color: "text-red-500", description: "Disable moderation" },
   { id: "blockforward", command: "/blockforward", label: "Block Forward", icon: Ban, color: "text-orange-500", description: "Block forwarded messages" },
   { id: "blocklinks", command: "/blocklinks", label: "Block Links", icon: Link2Off, color: "text-yellow-500", description: "Block links & usernames" },
   { id: "blockbadwords", command: "/blockbadwords", label: "Block Bad Words", icon: MessageSquareOff, color: "text-pink-500", description: "Block 18+ content" },
