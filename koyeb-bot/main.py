@@ -3144,15 +3144,105 @@ def register_bot_handlers():
 
                 await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
                 await callback_query.answer()
+            elif data == "mod_cmd_blockforward":
+                chat_id = callback_query.message.chat.id
+                mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+                status = mc.get("block_forward", False)
+                status_text = "✅ Enabled" if status else "❌ Disabled"
+                text = (
+                    "🚫 <b>Block Forward</b>\n\n"
+                    "When enabled, all forwarded messages from other channels/groups will be <b>automatically deleted</b>.\n\n"
+                    "This prevents users from spamming forwarded content in your group.\n\n"
+                    f"<b>Current Status:</b> {status_text}"
+                )
+                keyboard = [
+                    [
+                        InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockforward_on"),
+                        InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockforward_off"),
+                    ],
+                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                ]
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                await callback_query.answer()
+
+            elif data == "mod_cmd_blocklinks":
+                chat_id = callback_query.message.chat.id
+                mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+                status = mc.get("block_links", False)
+                status_text = "✅ Enabled" if status else "❌ Disabled"
+                text = (
+                    "🔗 <b>Block Links</b>\n\n"
+                    "When enabled, messages containing <b>URLs, Telegram links</b> (t.me) will be <b>automatically deleted</b>.\n\n"
+                    "This prevents users from posting promotional or spam links.\n\n"
+                    f"<b>Current Status:</b> {status_text}"
+                )
+                keyboard = [
+                    [
+                        InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blocklinks_on"),
+                        InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blocklinks_off"),
+                    ],
+                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                ]
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                await callback_query.answer()
+
+            elif data == "mod_cmd_blockbadwords":
+                chat_id = callback_query.message.chat.id
+                mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+                status = mc.get("block_badwords", False)
+                status_text = "✅ Enabled" if status else "❌ Disabled"
+                text = (
+                    "🔞 <b>Block Bad Words</b>\n\n"
+                    "When enabled, messages containing <b>inappropriate/abusive words</b> (Hindi + English) will be <b>automatically deleted</b> and the user will receive a warning.\n\n"
+                    f"<b>Current Status:</b> {status_text}"
+                )
+                keyboard = [
+                    [
+                        InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockbadwords_on"),
+                        InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockbadwords_off"),
+                    ],
+                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                ]
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                await callback_query.answer()
+
+            elif data == "mod_cmd_resetwarnings":
+                chat_id = callback_query.message.chat.id
+                warned_users = []
+                if warnings_col is not None:
+                    cursor = warnings_col.find({"chat_id": chat_id, "count": {"$gt": 0}})
+                    for doc in cursor:
+                        warned_users.append({"user_id": doc.get("user_id"), "count": doc.get("count", 0)})
+                
+                if not warned_users:
+                    text = (
+                        "🔄 <b>Reset Warnings</b>\n\n"
+                        "No warned users in this group.\n\n"
+                        "Use this menu to reset warnings for all users or use:\n"
+                        "<code>/resetwarnings @username</code> to reset a specific user."
+                    )
+                    keyboard = [
+                        [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                    ]
+                else:
+                    lines = ["🔄 <b>Reset Warnings</b>\n\n📋 <b>Warned Users:</b>\n"]
+                    for wu in warned_users[:20]:
+                        lines.append(f"• User <code>{wu['user_id']}</code> — {wu['count']} warning(s)")
+                    lines.append(f"\n<b>Total:</b> {len(warned_users)} user(s)")
+                    lines.append("\nUse <code>/resetwarnings @username</code> to reset a specific user.")
+                    text = "\n".join(lines)
+                    keyboard = [
+                        [InlineKeyboardButton("🗑 Reset ALL Warnings", callback_data="mod_reset_all_warnings")],
+                        [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                    ]
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                await callback_query.answer()
+
             else:
                 cmd_map = {
                     "mod_cmd_enablemod": "/enablemod",
                     "mod_cmd_disablemod": "/disablemod",
-                    "mod_cmd_blockforward": "/blockforward",
-                    "mod_cmd_blocklinks": "/blocklinks",
-                    "mod_cmd_blockbadwords": "/blockbadwords",
                     "mod_cmd_modstatus": "/modstatus",
-                    "mod_cmd_resetwarnings": "/resetwarnings @username",
                 }
                 cmd_text = cmd_map.get(data, "")
                 if cmd_text:
@@ -3261,6 +3351,108 @@ def register_bot_handlers():
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")]]),
                     parse_mode="html"
                 )
+        elif data.startswith("mod_toggle_blockforward_"):
+            chat_id = callback_query.message.chat.id
+            enable = data.endswith("_on")
+            mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+            mc["block_forward"] = enable
+            if enable:
+                mc["enabled"] = True
+            moderation_config[chat_id] = mc
+            save_moderation_config(chat_id)
+            await callback_query.answer(f"{'✅ Block Forward Enabled!' if enable else '❌ Block Forward Disabled!'}", show_alert=True)
+            # Re-render
+            callback_query.data = "mod_cmd_blockforward"
+            status = mc.get("block_forward", False)
+            status_text = "✅ Enabled" if status else "❌ Disabled"
+            text = (
+                "🚫 <b>Block Forward</b>\n\n"
+                "When enabled, all forwarded messages from other channels/groups will be <b>automatically deleted</b>.\n\n"
+                "This prevents users from spamming forwarded content in your group.\n\n"
+                f"<b>Current Status:</b> {status_text}"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockforward_on"),
+                    InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockforward_off"),
+                ],
+                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+            ]
+            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+
+        elif data.startswith("mod_toggle_blocklinks_"):
+            chat_id = callback_query.message.chat.id
+            enable = data.endswith("_on")
+            mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+            mc["block_links"] = enable
+            if enable:
+                mc["enabled"] = True
+            moderation_config[chat_id] = mc
+            save_moderation_config(chat_id)
+            await callback_query.answer(f"{'✅ Block Links Enabled!' if enable else '❌ Block Links Disabled!'}", show_alert=True)
+            status = mc.get("block_links", False)
+            status_text = "✅ Enabled" if status else "❌ Disabled"
+            text = (
+                "🔗 <b>Block Links</b>\n\n"
+                "When enabled, messages containing <b>URLs, Telegram links</b> (t.me) will be <b>automatically deleted</b>.\n\n"
+                "This prevents users from posting promotional or spam links.\n\n"
+                f"<b>Current Status:</b> {status_text}"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blocklinks_on"),
+                    InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blocklinks_off"),
+                ],
+                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+            ]
+            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+
+        elif data.startswith("mod_toggle_blockbadwords_"):
+            chat_id = callback_query.message.chat.id
+            enable = data.endswith("_on")
+            mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+            mc["block_badwords"] = enable
+            if enable:
+                mc["enabled"] = True
+            moderation_config[chat_id] = mc
+            save_moderation_config(chat_id)
+            await callback_query.answer(f"{'✅ Block Bad Words Enabled!' if enable else '❌ Block Bad Words Disabled!'}", show_alert=True)
+            status = mc.get("block_badwords", False)
+            status_text = "✅ Enabled" if status else "❌ Disabled"
+            text = (
+                "🔞 <b>Block Bad Words</b>\n\n"
+                "When enabled, messages containing <b>inappropriate/abusive words</b> (Hindi + English) will be <b>automatically deleted</b> and the user will receive a warning.\n\n"
+                f"<b>Current Status:</b> {status_text}"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockbadwords_on"),
+                    InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockbadwords_off"),
+                ],
+                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+            ]
+            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+
+        elif data == "mod_reset_all_warnings":
+            chat_id = callback_query.message.chat.id
+            if warnings_col is not None:
+                warnings_col.delete_many({"chat_id": chat_id})
+            # Also clear in-memory
+            keys_to_remove = [k for k in user_warnings if k[0] == chat_id]
+            for k in keys_to_remove:
+                del user_warnings[k]
+            await callback_query.answer("✅ All warnings have been reset!", show_alert=True)
+            # Re-render reset warnings menu
+            text = (
+                "🔄 <b>Reset Warnings</b>\n\n"
+                "✅ All warnings have been cleared!\n\n"
+                "No warned users in this group."
+            )
+            keyboard = [
+                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+            ]
+            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+
         elif data == "warn_mute_dur_label":
             await callback_query.answer("👇 Neeche number buttons se mute duration set karein", show_alert=True)
         elif data == "admin":
