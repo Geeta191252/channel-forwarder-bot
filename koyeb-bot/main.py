@@ -203,7 +203,45 @@ user_warnings = {}  # {(chat_id, user_id): warning_count}
 
 # Auto-delete message queue: {chat_id: [(message_id, timestamp), ...]}
 auto_delete_queue = {}
-MAX_WARNINGS = 3  # Auto-ban after this many warnings
+MAX_WARNINGS = 3  # Default, overridden per-group via warning_config
+
+# Warning config per group: {chat_id: {"punishment": "mute", "max_warns": 3, "mute_duration": 3}}
+# punishment: "off", "kick", "mute", "ban"
+warning_config = {}  # loaded from DB per group
+
+warning_config_col = db["warning_config"] if db is not None else None
+
+
+def load_warning_config(chat_id):
+    """Load warning config for a group from DB"""
+    global warning_config
+    if warning_config_col is not None:
+        saved = warning_config_col.find_one({"chat_id": chat_id})
+        if saved:
+            warning_config[chat_id] = {
+                "punishment": saved.get("punishment", "mute"),
+                "max_warns": saved.get("max_warns", 3),
+                "mute_duration": saved.get("mute_duration", 3),
+            }
+            return warning_config[chat_id]
+    return {"punishment": "mute", "max_warns": 3, "mute_duration": 3}
+
+
+def save_warning_config(chat_id):
+    """Save warning config for a group to DB"""
+    if warning_config_col is not None and chat_id in warning_config:
+        warning_config_col.update_one(
+            {"chat_id": chat_id},
+            {"$set": {**warning_config[chat_id], "chat_id": chat_id, "updated_at": datetime.utcnow()}},
+            upsert=True,
+        )
+
+
+def get_warning_config(chat_id):
+    """Get warning config for a group, loading from DB if needed"""
+    if chat_id not in warning_config:
+        load_warning_config(chat_id)
+    return warning_config.get(chat_id, {"punishment": "mute", "max_warns": 3, "mute_duration": 3})
 
 # Bad words list for content filtering (Hindi + English inappropriate/sexual words)
 BAD_WORDS = [
@@ -3058,19 +3096,173 @@ def register_bot_handlers():
             await callback_query.answer()
         elif data.startswith("mod_cmd_"):
             # Moderation command buttons - send command text to user
-            cmd_map = {
-                "mod_cmd_enablemod": "/enablemod",
-                "mod_cmd_disablemod": "/disablemod",
-                "mod_cmd_blockforward": "/blockforward",
-                "mod_cmd_blocklinks": "/blocklinks",
-                "mod_cmd_blockbadwords": "/blockbadwords",
-                "mod_cmd_modstatus": "/modstatus",
-                "mod_cmd_warnings": "/warnings @username",
-                "mod_cmd_resetwarnings": "/resetwarnings @username",
-            }
-            cmd_text = cmd_map.get(data, "")
-            if cmd_text:
-                await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
+            if data == "mod_cmd_warnings":
+                # Show warnings submenu like screenshot
+                chat_id = callback_query.message.chat.id
+                wc = get_warning_config(chat_id)
+                punishment = wc.get("punishment", "mute")
+                max_w = wc.get("max_warns", 3)
+                mute_dur = wc.get("mute_duration", 3)
+
+                punishment_labels = {"off": "Off", "kick": "Kick", "mute": "Mute", "ban": "Ban"}
+                current_p = punishment_labels.get(punishment, "Mute")
+
+                text = (
+                    "❗ <b>User warnings</b>\n"
+                    "The warning system allows you to give <u>warnings to users</u> for incorrect behavior in the group, before actually punishing them.\n\n"
+                    "From this menu you can set:\n"
+                    " • the <u>punishment</u> for users who exceed the maximum of warnings allowed\n"
+                    " • the <u>maximum number</u> of warns allowed\n\n"
+                    f"<b>Punishment:</b> {current_p}\n"
+                    f"<b>Max Warns allowed:</b> {max_w}"
+                )
+
+                # Build max warns row with checkmark on current
+                max_warn_buttons = []
+                for n in range(2, 7):
+                    label = f"{n} ✅" if n == max_w else str(n)
+                    max_warn_buttons.append(InlineKeyboardButton(label, callback_data=f"warn_maxw_{n}"))
+
+                # Punishment buttons with indicator
+                def p_label(key, emoji, label):
+                    return f"{emoji} {label}" if punishment != key else f"{emoji} {label} ✅"
+
+                keyboard = [
+                    [InlineKeyboardButton("📋 Warned List", callback_data="warn_list")],
+                    [
+                        InlineKeyboardButton(p_label("off", "✖", "Off"), callback_data="warn_p_off"),
+                        InlineKeyboardButton(p_label("kick", "❗", "Kick"), callback_data="warn_p_kick"),
+                    ],
+                    [
+                        InlineKeyboardButton(p_label("mute", "🔇", "Mute"), callback_data="warn_p_mute"),
+                        InlineKeyboardButton(p_label("ban", "🚫", "Ban"), callback_data="warn_p_ban"),
+                    ],
+                    [InlineKeyboardButton("🔇⏱ Set mute duration", callback_data="warn_mute_dur_label")],
+                    max_warn_buttons,
+                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                ]
+
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                await callback_query.answer()
+            else:
+                cmd_map = {
+                    "mod_cmd_enablemod": "/enablemod",
+                    "mod_cmd_disablemod": "/disablemod",
+                    "mod_cmd_blockforward": "/blockforward",
+                    "mod_cmd_blocklinks": "/blocklinks",
+                    "mod_cmd_blockbadwords": "/blockbadwords",
+                    "mod_cmd_modstatus": "/modstatus",
+                    "mod_cmd_resetwarnings": "/resetwarnings @username",
+                }
+                cmd_text = cmd_map.get(data, "")
+                if cmd_text:
+                    await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
+        elif data.startswith("warn_p_"):
+            # Set punishment type
+            chat_id = callback_query.message.chat.id
+            p_type = data.replace("warn_p_", "")
+            if p_type in ("off", "kick", "mute", "ban"):
+                wc = get_warning_config(chat_id)
+                wc["punishment"] = p_type
+                warning_config[chat_id] = wc
+                save_warning_config(chat_id)
+                await callback_query.answer(f"✅ Punishment set to: {p_type.title()}", show_alert=True)
+                # Re-render the warnings menu
+                # Simulate clicking mod_cmd_warnings again
+                callback_query.data = "mod_cmd_warnings"
+                # Re-trigger by editing message
+                wc = get_warning_config(chat_id)
+                punishment = wc.get("punishment", "mute")
+                max_w = wc.get("max_warns", 3)
+                punishment_labels = {"off": "Off", "kick": "Kick", "mute": "Mute", "ban": "Ban"}
+                current_p = punishment_labels.get(punishment, "Mute")
+                text = (
+                    "❗ <b>User warnings</b>\n"
+                    "The warning system allows you to give <u>warnings to users</u> for incorrect behavior in the group, before actually punishing them.\n\n"
+                    "From this menu you can set:\n"
+                    " • the <u>punishment</u> for users who exceed the maximum of warnings allowed\n"
+                    " • the <u>maximum number</u> of warns allowed\n\n"
+                    f"<b>Punishment:</b> {current_p}\n"
+                    f"<b>Max Warns allowed:</b> {max_w}"
+                )
+                max_warn_buttons = []
+                for n in range(2, 7):
+                    label = f"{n} ✅" if n == max_w else str(n)
+                    max_warn_buttons.append(InlineKeyboardButton(label, callback_data=f"warn_maxw_{n}"))
+                def p_label(key, emoji, lbl):
+                    return f"{emoji} {lbl}" if punishment != key else f"{emoji} {lbl} ✅"
+                keyboard = [
+                    [InlineKeyboardButton("📋 Warned List", callback_data="warn_list")],
+                    [InlineKeyboardButton(p_label("off", "✖", "Off"), callback_data="warn_p_off"), InlineKeyboardButton(p_label("kick", "❗", "Kick"), callback_data="warn_p_kick")],
+                    [InlineKeyboardButton(p_label("mute", "🔇", "Mute"), callback_data="warn_p_mute"), InlineKeyboardButton(p_label("ban", "🚫", "Ban"), callback_data="warn_p_ban")],
+                    [InlineKeyboardButton("🔇⏱ Set mute duration", callback_data="warn_mute_dur_label")],
+                    max_warn_buttons,
+                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                ]
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+        elif data.startswith("warn_maxw_"):
+            # Set max warnings
+            chat_id = callback_query.message.chat.id
+            try:
+                num = int(data.replace("warn_maxw_", ""))
+            except ValueError:
+                num = 3
+            wc = get_warning_config(chat_id)
+            wc["max_warns"] = num
+            warning_config[chat_id] = wc
+            save_warning_config(chat_id)
+            await callback_query.answer(f"✅ Max warns set to: {num}", show_alert=True)
+            # Re-render
+            punishment = wc.get("punishment", "mute")
+            max_w = num
+            punishment_labels = {"off": "Off", "kick": "Kick", "mute": "Mute", "ban": "Ban"}
+            current_p = punishment_labels.get(punishment, "Mute")
+            text = (
+                "❗ <b>User warnings</b>\n"
+                "The warning system allows you to give <u>warnings to users</u> for incorrect behavior in the group, before actually punishing them.\n\n"
+                "From this menu you can set:\n"
+                " • the <u>punishment</u> for users who exceed the maximum of warnings allowed\n"
+                " • the <u>maximum number</u> of warns allowed\n\n"
+                f"<b>Punishment:</b> {current_p}\n"
+                f"<b>Max Warns allowed:</b> {max_w}"
+            )
+            max_warn_buttons = []
+            for n in range(2, 7):
+                label = f"{n} ✅" if n == max_w else str(n)
+                max_warn_buttons.append(InlineKeyboardButton(label, callback_data=f"warn_maxw_{n}"))
+            def p_label(key, emoji, lbl):
+                return f"{emoji} {lbl}" if punishment != key else f"{emoji} {lbl} ✅"
+            keyboard = [
+                [InlineKeyboardButton("📋 Warned List", callback_data="warn_list")],
+                [InlineKeyboardButton(p_label("off", "✖", "Off"), callback_data="warn_p_off"), InlineKeyboardButton(p_label("kick", "❗", "Kick"), callback_data="warn_p_kick")],
+                [InlineKeyboardButton(p_label("mute", "🔇", "Mute"), callback_data="warn_p_mute"), InlineKeyboardButton(p_label("ban", "🚫", "Ban"), callback_data="warn_p_ban")],
+                [InlineKeyboardButton("🔇⏱ Set mute duration", callback_data="warn_mute_dur_label")],
+                max_warn_buttons,
+                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+            ]
+            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+        elif data == "warn_list":
+            # Show warned users list for this chat
+            chat_id = callback_query.message.chat.id
+            warned_users = []
+            if warnings_col is not None:
+                cursor = warnings_col.find({"chat_id": chat_id, "count": {"$gt": 0}})
+                for doc in cursor:
+                    warned_users.append({"user_id": doc.get("user_id"), "count": doc.get("count", 0)})
+            if not warned_users:
+                await callback_query.answer("📋 No warned users in this group!", show_alert=True)
+            else:
+                lines = ["📋 <b>Warned Users:</b>\n"]
+                for wu in warned_users[:20]:
+                    lines.append(f"• User <code>{wu['user_id']}</code> — {wu['count']} warning(s)")
+                text = "\n".join(lines)
+                await safe_edit_message(
+                    callback_query.message, text,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")]]),
+                    parse_mode="html"
+                )
+        elif data == "warn_mute_dur_label":
+            await callback_query.answer("👇 Neeche number buttons se mute duration set karein", show_alert=True)
         elif data == "admin":
             # Verify user access
             if not await verify_user_access(callback_query, client):
@@ -5718,10 +5910,17 @@ def register_bot_handlers():
             return
         
         async def add_warning_and_check_ban(reason):
-            """Add warning to user and ban if exceeded limit"""
+            """Add warning to user and punish if exceeded limit"""
             global user_warnings, moderation_stats
             
             key = (chat_id, user_id)
+            wc = get_warning_config(chat_id)
+            max_warns = wc.get("max_warns", 3)
+            punishment = wc.get("punishment", "mute")
+            
+            # If punishment is off, skip warnings entirely
+            if punishment == "off":
+                return
             
             # Load from DB if not in memory
             if key not in user_warnings and warnings_col is not None:
@@ -5743,39 +5942,57 @@ def register_bot_handlers():
             
             user_name = message.from_user.first_name
             
-            # Check if should ban
-            if current_warnings >= MAX_WARNINGS:
+            # Check if should punish
+            if current_warnings >= max_warns:
                 try:
-                    await client.ban_chat_member(chat_id, user_id)
-                    moderation_stats["bans"] += 1
-                    ban_msg = await client.send_message(
+                    if punishment == "ban":
+                        await client.ban_chat_member(chat_id, user_id)
+                        moderation_stats["bans"] += 1
+                        action_text = "🚫 Auto-Ban"
+                    elif punishment == "kick":
+                        await client.ban_chat_member(chat_id, user_id)
+                        # Unban immediately so they can rejoin (kick behavior)
+                        await client.unban_chat_member(chat_id, user_id)
+                        action_text = "👢 Auto-Kick"
+                    elif punishment == "mute":
+                        mute_dur = wc.get("mute_duration", 3)
+                        from datetime import timedelta
+                        until = datetime.utcnow() + timedelta(hours=mute_dur)
+                        await client.restrict_chat_member(
+                            chat_id, user_id,
+                            ChatPermissions(),  # No permissions = muted
+                            until_date=until
+                        )
+                        action_text = f"🔇 Auto-Mute ({mute_dur}h)"
+                    else:
+                        action_text = "⚠️ Punished"
+                    
+                    p_msg = await client.send_message(
                         chat_id,
-                        f"🚫 **Auto-Ban:** {user_name}\n"
-                        f"Reason: {MAX_WARNINGS} warnings exceeded\n"
+                        f"{action_text}: {user_name}\n"
+                        f"Reason: {max_warns} warnings exceeded\n"
                         f"Last violation: {reason}"
                     )
-                    # Auto-delete ban message after 10 seconds
-                    asyncio.create_task(auto_delete_message(ban_msg, 10))
-                    # Reset warnings after ban
+                    asyncio.create_task(auto_delete_message(p_msg, 10))
+                    # Reset warnings
                     user_warnings[key] = 0
                     if warnings_col is not None:
                         warnings_col.update_one(
                             {"chat_id": chat_id, "user_id": user_id},
-                            {"$set": {"count": 0, "banned": True}}
+                            {"$set": {"count": 0, "punished": True}}
                         )
-                    print(f"🔨 Auto-banned {user_name} after {MAX_WARNINGS} warnings")
+                    print(f"🔨 {action_text} {user_name} after {max_warns} warnings")
                 except Exception as e:
-                    print(f"Failed to ban user: {e}")
+                    print(f"Failed to punish user: {e}")
             else:
                 # Send warning message
-                remaining = MAX_WARNINGS - current_warnings
+                remaining = max_warns - current_warnings
                 warn_msg = await client.send_message(
                     chat_id,
-                    f"⚠️ **Warning {current_warnings}/{MAX_WARNINGS}:** {user_name}\n"
+                    f"⚠️ **Warning {current_warnings}/{max_warns}:** {user_name}\n"
                     f"Reason: {reason}\n"
-                    f"⛔ {remaining} more warning{'s' if remaining > 1 else ''} = Auto-Ban!"
+                    f"⛔ {remaining} more warning{'s' if remaining > 1 else ''} = {punishment.title()}!"
                 )
-                # Auto-delete warning message after 10 seconds
                 asyncio.create_task(auto_delete_message(warn_msg, 10))
         
         try:
