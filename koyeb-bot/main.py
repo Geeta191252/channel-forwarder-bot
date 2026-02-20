@@ -3025,16 +3025,8 @@ def register_bot_handlers():
             await safe_edit_message(
                 callback_query.message,
                 "🛡️ **Content Moderation**\n\n"
-                "Add bot as admin in your group, then use:\n\n"
-                "**Commands (in group):**\n"
-                "/enablemod - Enable moderation\n"
-                "/disablemod - Disable moderation\n"
-                "/blockforward - Block forwarded messages\n"
-                "/blocklinks - Block links/URLs/usernames\n"
-                "/blockbadwords - 🔞 Block sex/adult content\n"
-                "/modstatus - View moderation settings\n"
-                "/warnings - Check user warnings\n"
-                "/resetwarnings - Reset user warnings (admin)\n\n"
+                "Add bot as admin in your group, then use:\n"
+                "👇 Button press karke command copy karein\n\n"
                 "🔞 **Sex Content Filter:**\n"
                 "Use /blockbadwords to auto-delete:\n"
                 "• Sex messages (sex, porn, xxx, etc.)\n"
@@ -3044,10 +3036,41 @@ def register_bot_handlers():
                 "• Warning given on each violation\n"
                 "• Admins are exempt from all filters",
                 reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Enable Mod", callback_data="mod_cmd_enablemod"),
+                        InlineKeyboardButton("❌ Disable Mod", callback_data="mod_cmd_disablemod")
+                    ],
+                    [
+                        InlineKeyboardButton("🚫 Block Forward", callback_data="mod_cmd_blockforward"),
+                        InlineKeyboardButton("🔗 Block Links", callback_data="mod_cmd_blocklinks")
+                    ],
+                    [
+                        InlineKeyboardButton("🔞 Block Bad Words", callback_data="mod_cmd_blockbadwords"),
+                        InlineKeyboardButton("👁 Mod Status", callback_data="mod_cmd_modstatus")
+                    ],
+                    [
+                        InlineKeyboardButton("⚠️ Warnings", callback_data="mod_cmd_warnings"),
+                        InlineKeyboardButton("🔄 Reset Warnings", callback_data="mod_cmd_resetwarnings")
+                    ],
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
                 ])
             )
             await callback_query.answer()
+        elif data.startswith("mod_cmd_"):
+            # Moderation command buttons - send command text to user
+            cmd_map = {
+                "mod_cmd_enablemod": "/enablemod",
+                "mod_cmd_disablemod": "/disablemod",
+                "mod_cmd_blockforward": "/blockforward",
+                "mod_cmd_blocklinks": "/blocklinks",
+                "mod_cmd_blockbadwords": "/blockbadwords",
+                "mod_cmd_modstatus": "/modstatus",
+                "mod_cmd_warnings": "/warnings @username",
+                "mod_cmd_resetwarnings": "/resetwarnings @username",
+            }
+            cmd_text = cmd_map.get(data, "")
+            if cmd_text:
+                await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
         elif data == "admin":
             # Verify user access
             if not await verify_user_access(callback_query, client):
