@@ -2483,7 +2483,7 @@ def register_bot_handlers():
                 InlineKeyboardButton("❓ Help", callback_data="help")
             ],
             [
-                InlineKeyboardButton("🔙 Back", callback_data="back_to_start")
+                InlineKeyboardButton("🔙 Back", callback_data="manage_settings")
             ]
         ])
 
@@ -2621,7 +2621,7 @@ def register_bot_handlers():
     async def callback_handler(client, callback_query):
         data = callback_query.data
         
-        # Handle "Manage Group Settings" button
+        # Handle "Manage Group Settings" button - show group list only
         if data == "manage_settings":
             user_id = callback_query.from_user.id
             
@@ -2633,49 +2633,70 @@ def register_bot_handlers():
                 except Exception as e:
                     print(f"❌ Error fetching admin groups: {e}", flush=True)
             
-            # Build group list text
+            # Build group buttons - each group is a clickable button
+            keyboard_buttons = []
             if admin_groups:
-                groups_text = "📋 **Your Groups:**\n\n"
-                for idx, grp in enumerate(admin_groups, 1):
+                for grp in admin_groups:
                     title = grp.get("title") or grp.get("chat_title") or "Unknown"
                     chat_id = grp.get("chat_id", "")
                     member_count = grp.get("member_count", 0)
-                    # Build clickable link
-                    link = None
+                    # Check for link arrow
                     username = grp.get("username")
                     invite = grp.get("invite_link")
-                    if username:
-                        link = f"https://t.me/{username}"
-                    elif invite:
-                        link = invite
+                    has_link = bool(username or invite)
                     
-                    if link:
-                        groups_text += f"{idx}. [{title}]({link})"
-                    else:
-                        groups_text += f"{idx}. **{title}**"
+                    btn_text = f"{'🔗 ' if has_link else ''}{title}"
                     if member_count:
-                        groups_text += f" — 👥 {member_count}"
-                    groups_text += "\n"
-                
-                groups_text += f"\n📊 **Total Groups: {len(admin_groups)}**\n"
-            else:
-                groups_text = "📋 **No groups found!**\nAdd me to a group and make me admin.\n"
+                        btn_text += f" — {member_count}%"
+                    
+                    keyboard_buttons.append([InlineKeyboardButton(btn_text, callback_data=f"select_group_{chat_id}")])
+            
+            keyboard_buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_start")])
+            
+            msg_text = (
+                f"**Manage group Settings**\n"
+                f"👉 Select the group whose settings you want to change.\n\n"
+                f"If a group in which **you are an administrator** doesn't appear here:\n"
+                f"  • Send /reload in the group and try again\n"
+                f"  • Send /settings in the group and then press \"Open in pvt\""
+            )
+            
+            await safe_edit_message(
+                callback_query.message,
+                msg_text,
+                reply_markup=InlineKeyboardMarkup(keyboard_buttons)
+            )
+            await callback_query.answer()
+            return
+        
+        # Handle group selection - show settings for that group
+        if data.startswith("select_group_"):
+            selected_group_id = data.replace("select_group_", "")
+            user_id = callback_query.from_user.id
+            
+            # Get group info
+            group_title = "Group"
+            if admin_groups_col is not None:
+                try:
+                    grp_data = admin_groups_col.find_one({"chat_id": int(selected_group_id) if selected_group_id.lstrip('-').isdigit() else selected_group_id})
+                    if grp_data:
+                        group_title = grp_data.get("title") or grp_data.get("chat_title") or "Group"
+                except Exception:
+                    pass
             
             num_accounts = len(user_clients)
             expected_speed = num_accounts * 30 if num_accounts else 0
             
             if user_id in ADMIN_IDS:
                 msg_text = (
-                    f"⚙️ **Manage Group Settings**\n\n"
-                    f"{groups_text}\n"
+                    f"⚙️ **{group_title} — Settings**\n\n"
                     f"👥 Active accounts: {num_accounts}\n"
                     f"⚡ Expected speed: ~{expected_speed}/min\n\n"
                     f"Select an option below:"
                 )
             else:
                 msg_text = (
-                    f"⚙️ **Manage Group Settings**\n\n"
-                    f"{groups_text}\n"
+                    f"⚙️ **{group_title} — Settings**\n\n"
                     f"Select an option below:"
                 )
             
