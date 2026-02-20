@@ -1,40 +1,11 @@
 import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Shield, UserPlus, Trash2, Info, Copy, CheckCircle } from "lucide-react";
 import { toast } from "sonner";
 
 export const ForceJoin = () => {
   const [copied, setCopied] = useState<string | null>(null);
-
-  const commands = [
-    {
-      id: "setforcejoin",
-      name: "Set Force Join",
-      command: "/setforcejoin @channel_or_group|Name|https://t.me/+invite",
-      description: "Group में Force Join enable करें। Users को channel/group join करना होगा।",
-      icon: UserPlus,
-      color: "text-green-500",
-    },
-    {
-      id: "removeforcejoin",
-      name: "Remove Force Join",
-      command: "/removeforcejoin",
-      description: "Group से Force Join disable करें।",
-      icon: Trash2,
-      color: "text-red-500",
-    },
-    {
-      id: "forcejoininfo",
-      name: "Force Join Info",
-      command: "/forcejoininfo",
-      description: "Current Force Join status देखें।",
-      icon: Info,
-      color: "text-blue-500",
-    },
-  ];
 
   const copyCommand = (command: string, id: string) => {
     navigator.clipboard.writeText(command);
@@ -42,6 +13,13 @@ export const ForceJoin = () => {
     toast.success("Command copied!");
     setTimeout(() => setCopied(null), 2000);
   };
+
+  const CopyIcon = ({ id }: { id: string }) =>
+    copied === id ? (
+      <CheckCircle className="h-4 w-4 text-green-500" />
+    ) : (
+      <Copy className="h-4 w-4 opacity-60" />
+    );
 
   return (
     <Card className="border-primary/20">
@@ -54,42 +32,41 @@ export const ForceJoin = () => {
           Group में message भेजने से पहले users को channel या group join करना होगा
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        {commands.map((cmd) => {
-          const Icon = cmd.icon;
-          return (
-            <div
-              key={cmd.id}
-              className="flex items-start gap-3 p-3 rounded-lg bg-muted/50 border border-border"
-            >
-              <div className={`mt-0.5 ${cmd.color}`}>
-                <Icon className="h-5 w-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="font-medium text-foreground">{cmd.name}</h4>
-                <p className="text-sm text-muted-foreground mb-2">{cmd.description}</p>
-                <div className="flex items-center gap-2">
-                  <code className="text-xs bg-background px-2 py-1 rounded border border-border flex-1 overflow-x-auto">
-                    {cmd.command}
-                  </code>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => copyCommand(cmd.command, cmd.id)}
-                    className="shrink-0"
-                  >
-                    {copied === cmd.id ? (
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+      <CardContent className="space-y-2">
+        {/* Full width button - Set Force Join */}
+        <Button
+          variant="outline"
+          className="w-full justify-center gap-2 h-12 text-sm bg-primary/5 border-primary/20 hover:bg-primary/10"
+          onClick={() => copyCommand("/setforcejoin @channel_or_group|Name|https://t.me/+invite", "setforcejoin")}
+        >
+          <UserPlus className="h-5 w-5 text-green-500" />
+          <span className="font-medium">Set Force Join</span>
+          <CopyIcon id="setforcejoin" />
+        </Button>
 
+        {/* Two buttons in a row - Remove & Info */}
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            variant="outline"
+            className="w-full justify-center gap-2 h-12 text-sm bg-primary/5 border-primary/20 hover:bg-primary/10"
+            onClick={() => copyCommand("/removeforcejoin", "removeforcejoin")}
+          >
+            <Trash2 className="h-5 w-5 text-red-500" />
+            <span className="font-medium">Remove</span>
+            <CopyIcon id="removeforcejoin" />
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full justify-center gap-2 h-12 text-sm bg-primary/5 border-primary/20 hover:bg-primary/10"
+            onClick={() => copyCommand("/forcejoininfo", "forcejoininfo")}
+          >
+            <Info className="h-5 w-5 text-blue-500" />
+            <span className="font-medium">Info</span>
+            <CopyIcon id="forcejoininfo" />
+          </Button>
+        </div>
+
+        {/* How to use section */}
         <div className="mt-4 p-3 rounded-lg bg-primary/5 border border-primary/20">
           <h4 className="font-medium text-foreground mb-2 flex items-center gap-2">
             <Info className="h-4 w-4 text-primary" />
