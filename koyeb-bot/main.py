@@ -3270,31 +3270,50 @@ def register_bot_handlers():
             
             await safe_edit_message(
                 callback_query.message,
-                "🆘 **Admin Controls**\n\n"
-                "**🔒 Force Join (New!):**\n"
-                "`/setforcejoin @channel|Name|Link` - Enable\n"
-                "`/removeforcejoin` - Disable force join\n"
-                "`/forcejoininfo` - View status\n\n"
-                "**👥 Join Wait (New!):**\n"
-                "`/setjoinwait <number>` - Members add करने पर ही message\n"
-                "`/removejoinwait` - Disable join wait\n"
-                "`/joinwaitstatus` - View status\n\n"
-                "**Block @Mentions:**\n"
-                "`/blockmention` - Toggle @mention blocking\n\n"
-                "**Auto-Delete 2 min:**\n"
-                "`/autodelete2min` - Toggle auto-delete\n\n"
-                "**Other Commands (in group):**\n"
-                "`/enablemod` - Enable moderation first\n"
-                "`/modstatus` - View all settings\n\n"
-                "⚡ Force Join: Non-members के messages delete होंगे!\n"
-                "👥 Join Wait: New user को X members add करने होंगे!\n"
-                "🧩 Build: joinwait-v1\n"
-                "👮 Admins are exempt from filters.",
+                "🆘 <b>Admin Controls</b>\n\n"
+                "👇 Button press karke command dekho:",
                 reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🔒 Set Force Join", callback_data="acmd_setforcejoin"),
+                        InlineKeyboardButton("❌ Remove Force Join", callback_data="acmd_removeforcejoin")
+                    ],
+                    [
+                        InlineKeyboardButton("ℹ️ Force Join Info", callback_data="acmd_forcejoininfo"),
+                        InlineKeyboardButton("👥 Set Join Wait", callback_data="acmd_setjoinwait")
+                    ],
+                    [
+                        InlineKeyboardButton("🚫 Remove Join Wait", callback_data="acmd_removejoinwait"),
+                        InlineKeyboardButton("📊 Join Wait Status", callback_data="acmd_joinwaitstatus")
+                    ],
+                    [
+                        InlineKeyboardButton("🔗 Block Mention", callback_data="acmd_blockmention"),
+                        InlineKeyboardButton("⏱ Auto Delete 2min", callback_data="acmd_autodelete2min")
+                    ],
+                    [
+                        InlineKeyboardButton("✅ Enable Mod", callback_data="acmd_enablemod"),
+                        InlineKeyboardButton("👁 Mod Status", callback_data="acmd_modstatus")
+                    ],
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-                ])
+                ]),
+                parse_mode="html"
             )
             await callback_query.answer()
+        elif data.startswith("acmd_"):
+            acmd_map = {
+                "acmd_setforcejoin": "/setforcejoin @channel|Name|Link",
+                "acmd_removeforcejoin": "/removeforcejoin",
+                "acmd_forcejoininfo": "/forcejoininfo",
+                "acmd_setjoinwait": "/setjoinwait <number>",
+                "acmd_removejoinwait": "/removejoinwait",
+                "acmd_joinwaitstatus": "/joinwaitstatus",
+                "acmd_blockmention": "/blockmention",
+                "acmd_autodelete2min": "/autodelete2min",
+                "acmd_enablemod": "/enablemod",
+                "acmd_modstatus": "/modstatus",
+            }
+            cmd_text = acmd_map.get(data, "")
+            if cmd_text:
+                await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
         elif data == "join_request":
             # Verify user access
             if not await verify_user_access(callback_query, client):
@@ -3303,23 +3322,36 @@ def register_bot_handlers():
             channels_list = "\n".join([f"• `{ch}`" for ch in auto_approve_channels]) if auto_approve_channels else "None"
             await safe_edit_message(
                 callback_query.message,
-                "📥 **Join Request Auto-Approve**\n\n"
-                "📢 Works for both **Channels & Groups**!\n\n"
-                f"**Status:** {'🟢 Active' if auto_approve_channels else '🔴 Inactive'}\n"
-                f"**Total:** {len(auto_approve_channels)}\n"
+                "📥 <b>Join Request Auto-Approve</b>\n\n"
+                f"<b>Status:</b> {'🟢 Active' if auto_approve_channels else '🔴 Inactive'}\n"
+                f"<b>Total:</b> {len(auto_approve_channels)}\n"
                 f"✅ Approved: {auto_approve_stats['approved']}\n"
                 f"❌ Failed: {auto_approve_stats['failed']}\n\n"
-                f"**Active Channels/Groups:**\n{channels_list}\n\n"
-                "**Commands:**\n"
-                "/autoapprove <channel/group> - Enable\n"
-                "/stopapprove <channel/group> - Disable\n"
-                "/approveall <channel/group> - Accept all pending\n"
-                "/approvelist - Show all enabled",
+                "👇 Button press karke command dekho:",
                 reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Auto Approve", callback_data="jcmd_autoapprove"),
+                        InlineKeyboardButton("🛑 Stop Approve", callback_data="jcmd_stopapprove")
+                    ],
+                    [
+                        InlineKeyboardButton("📋 Approve All", callback_data="jcmd_approveall"),
+                        InlineKeyboardButton("📜 Approve List", callback_data="jcmd_approvelist")
+                    ],
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-                ])
+                ]),
+                parse_mode="html"
             )
             await callback_query.answer()
+        elif data.startswith("jcmd_"):
+            jcmd_map = {
+                "jcmd_autoapprove": "/autoapprove <channel/group>",
+                "jcmd_stopapprove": "/stopapprove <channel/group>",
+                "jcmd_approveall": "/approveall <channel/group>",
+                "jcmd_approvelist": "/approvelist",
+            }
+            cmd_text = jcmd_map.get(data, "")
+            if cmd_text:
+                await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
         elif data == "file_logo":
             # Verify user access
             if not await verify_user_access(callback_query, client):
@@ -3327,76 +3359,100 @@ def register_bot_handlers():
             
             await safe_edit_message(
                 callback_query.message,
-                "🖼️ **File Logo / Watermark**\n\n"
-                f"**Status:** {'🟢 Enabled' if logo_config.get('enabled') else '🔴 Disabled'}\n"
-                f"**Logo:** {'✅ Set' if logo_config.get('logo_file_id') else '❌ Not set'}\n"
-                f"**Text:** {logo_config.get('text') or 'Not set'}\n"
-                f"**Position:** {logo_config.get('position', 'bottom-right')}\n"
-                f"**Opacity:** {logo_config.get('opacity', 128)}/255\n"
-                f"**Size:** {logo_config.get('size', 20)}%\n\n"
-                f"📊 **Stats:**\n"
-                f"✅ Watermarked: {logo_stats['watermarked']}\n"
-                f"❌ Failed: {logo_stats['failed']}\n\n"
-                "**Commands:**\n"
-                "/setlogo - Reply to image to set logo\n"
-                "/setlogotext <text> - Set text watermark\n"
-                "/logoposition <pos> - Set position\n"
-                "/logosize <1-50> - Set size %\n"
-                "/logoopacity <0-255> - Set opacity\n"
-                "/enablelogo - Enable watermark\n"
-                "/disablelogo - Disable watermark\n"
-                "/removelogo - Remove logo\n"
-                "/logoinfo - Show logo settings",
+                "🖼️ <b>File Logo / Watermark</b>\n\n"
+                f"<b>Status:</b> {'🟢 Enabled' if logo_config.get('enabled') else '🔴 Disabled'}\n"
+                f"<b>Logo:</b> {'✅ Set' if logo_config.get('logo_file_id') else '❌ Not set'}\n"
+                f"<b>Position:</b> {logo_config.get('position', 'bottom-right')}\n"
+                f"<b>Size:</b> {logo_config.get('size', 20)}%\n\n"
+                "👇 Button press karke command dekho:",
                 reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("🖼 Set Logo", callback_data="lcmd_setlogo"),
+                        InlineKeyboardButton("📝 Set Logo Text", callback_data="lcmd_setlogotext")
+                    ],
+                    [
+                        InlineKeyboardButton("📍 Position", callback_data="lcmd_logoposition"),
+                        InlineKeyboardButton("📏 Size", callback_data="lcmd_logosize")
+                    ],
+                    [
+                        InlineKeyboardButton("🔆 Opacity", callback_data="lcmd_logoopacity"),
+                        InlineKeyboardButton("ℹ️ Logo Info", callback_data="lcmd_logoinfo")
+                    ],
+                    [
+                        InlineKeyboardButton("✅ Enable Logo", callback_data="lcmd_enablelogo"),
+                        InlineKeyboardButton("❌ Disable Logo", callback_data="lcmd_disablelogo")
+                    ],
+                    [
+                        InlineKeyboardButton("🗑 Remove Logo", callback_data="lcmd_removelogo")
+                    ],
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-                ])
+                ]),
+                parse_mode="html"
             )
             await callback_query.answer()
+        elif data.startswith("lcmd_"):
+            lcmd_map = {
+                "lcmd_setlogo": "/setlogo (reply to image)",
+                "lcmd_setlogotext": "/setlogotext <text>",
+                "lcmd_logoposition": "/logoposition <pos>",
+                "lcmd_logosize": "/logosize <1-50>",
+                "lcmd_logoopacity": "/logoopacity <0-255>",
+                "lcmd_logoinfo": "/logoinfo",
+                "lcmd_enablelogo": "/enablelogo",
+                "lcmd_disablelogo": "/disablelogo",
+                "lcmd_removelogo": "/removelogo",
+            }
+            cmd_text = lcmd_map.get(data, "")
+            if cmd_text:
+                await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
         elif data == "help":
             user_id = callback_query.from_user.id
             
-            # Show different help based on admin status
+            help_buttons = [
+                [
+                    InlineKeyboardButton("▶️ Start", callback_data="hcmd_start"),
+                    InlineKeyboardButton("📤 Forward", callback_data="hcmd_forward")
+                ],
+                [
+                    InlineKeyboardButton("⏸ Stop", callback_data="hcmd_stop"),
+                    InlineKeyboardButton("📊 Progress", callback_data="hcmd_progress")
+                ],
+                [
+                    InlineKeyboardButton("📡 Status", callback_data="hcmd_status"),
+                    InlineKeyboardButton("🔄 Resume", callback_data="hcmd_resume")
+                ],
+            ]
+            
             if user_id in ADMIN_IDS:
-                help_text = (
-                    "❓ **Help Menu**\n\n"
-                    "**📤 Forwarding:**\n"
-                    "/start - Show main menu\n"
-                    "/setconfig - Set channels\n"
-                    "/forward - Start forwarding\n"
-                    "/resume - Resume forwarding\n"
-                    "/stop - Stop forwarding\n"
-                    "/progress - Show progress\n"
-                    "/status - Show status\n"
-                    "/accounts - Show accounts\n\n"
-                    "**🛡️ Moderation (in groups):**\n"
-                    "/enablemod - Enable moderation\n"
-                    "/blockforward - Block forwards\n"
-                    "/blocklinks - Block links\n"
-                    "/blockbadwords - Block bad content\n"
-                    "/modstatus - View settings"
-                )
-            else:
-                help_text = (
-                    "❓ **Help Menu**\n\n"
-                    "**📤 Forwarding:**\n"
-                    "/start - Show main menu\n"
-                    "/forward - Start forwarding\n\n"
-                    "**🛡️ Moderation (in groups):**\n"
-                    "/enablemod - Enable moderation\n"
-                    "/blockforward - Block forwards\n"
-                    "/blocklinks - Block links\n"
-                    "/blockbadwords - Block bad content\n"
-                    "/modstatus - View settings"
-                )
+                help_buttons.append([
+                    InlineKeyboardButton("⚙️ Set Config", callback_data="hcmd_setconfig"),
+                    InlineKeyboardButton("👥 Accounts", callback_data="hcmd_accounts")
+                ])
+            
+            help_buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_main")])
             
             await safe_edit_message(
                 callback_query.message,
-                help_text,
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
-                ])
+                "❓ <b>Help Menu</b>\n\n"
+                "👇 Button press karke command dekho:",
+                reply_markup=InlineKeyboardMarkup(help_buttons),
+                parse_mode="html"
             )
             await callback_query.answer()
+        elif data.startswith("hcmd_"):
+            hcmd_map = {
+                "hcmd_start": "/start",
+                "hcmd_forward": "/forward",
+                "hcmd_stop": "/stop",
+                "hcmd_progress": "/progress",
+                "hcmd_status": "/status",
+                "hcmd_resume": "/resume",
+                "hcmd_setconfig": "/setconfig",
+                "hcmd_accounts": "/accounts",
+            }
+            cmd_text = hcmd_map.get(data, "")
+            if cmd_text:
+                await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
         elif data == "filters_menu":
             # Verify user access
             if not await verify_user_access(callback_query, client):
