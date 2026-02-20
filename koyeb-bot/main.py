@@ -3138,7 +3138,8 @@ def register_bot_handlers():
             )
             await callback_query.answer()
         elif data.startswith("mod_cmd_"):
-            # Moderation command buttons - send command text to user
+            # Moderation command buttons
+            print(f"[MOD_CMD] Handling callback: {data}", flush=True)
             if data == "mod_cmd_warnings":
                 chat_id = callback_query.message.chat.id
                 text, markup = build_warnings_menu(chat_id)
@@ -3319,50 +3320,69 @@ def register_bot_handlers():
                 )
                 await callback_query.answer()
         elif data.startswith("warn_p_"):
-            chat_id = callback_query.message.chat.id
-            p_type = data.replace("warn_p_", "")
-            if p_type in ("off", "kick", "mute", "ban"):
+            try:
+                chat_id = callback_query.message.chat.id
+                p_type = data.replace("warn_p_", "")
+                print(f"[WARN_P] chat_id={chat_id} p_type={p_type}", flush=True)
+                if p_type in ("off", "kick", "mute", "ban"):
+                    wc = get_warning_config(chat_id)
+                    wc["punishment"] = p_type
+                    warning_config[chat_id] = wc
+                    save_warning_config(chat_id)
+                    await callback_query.answer(f"✅ Punishment set to: {p_type.title()}", show_alert=True)
+                    text, markup = build_warnings_menu(chat_id)
+                    await safe_edit_message(callback_query.message, text, reply_markup=markup, parse_mode="html")
+                else:
+                    await callback_query.answer(f"❌ Unknown punishment: {p_type}", show_alert=True)
+            except Exception as e:
+                print(f"[WARN_P ERROR] {e}", flush=True)
+                await callback_query.answer(f"❌ Error: {e}", show_alert=True)
+        elif data.startswith("warn_maxw_"):
+            try:
+                chat_id = callback_query.message.chat.id
+                num = int(data.replace("warn_maxw_", ""))
+                print(f"[WARN_MAXW] chat_id={chat_id} num={num}", flush=True)
+                if num < 2:
+                    num = 2
+                if num > 6:
+                    num = 6
                 wc = get_warning_config(chat_id)
-                wc["punishment"] = p_type
+                wc["max_warns"] = num
                 warning_config[chat_id] = wc
                 save_warning_config(chat_id)
-                await callback_query.answer(f"✅ Punishment set to: {p_type.title()}", show_alert=True)
+                await callback_query.answer(f"✅ Max warns set to: {num}", show_alert=True)
                 text, markup = build_warnings_menu(chat_id)
                 await safe_edit_message(callback_query.message, text, reply_markup=markup, parse_mode="html")
-        elif data.startswith("warn_maxw_"):
-            chat_id = callback_query.message.chat.id
-            try:
-                num = int(data.replace("warn_maxw_", ""))
-            except ValueError:
-                num = 3
-            wc = get_warning_config(chat_id)
-            wc["max_warns"] = num
-            warning_config[chat_id] = wc
-            save_warning_config(chat_id)
-            await callback_query.answer(f"✅ Max warns set to: {num}", show_alert=True)
-            text, markup = build_warnings_menu(chat_id)
-            await safe_edit_message(callback_query.message, text, reply_markup=markup, parse_mode="html")
+            except Exception as e:
+                print(f"[WARN_MAXW ERROR] {e}", flush=True)
+                await callback_query.answer(f"❌ Error: {e}", show_alert=True)
         # (duplicate warn_maxw_ removed)
         elif data == "warn_list":
-            # Show warned users list for this chat
-            chat_id = callback_query.message.chat.id
-            warned_users = []
-            if warnings_col is not None:
-                cursor = warnings_col.find({"chat_id": chat_id, "count": {"$gt": 0}})
-                for doc in cursor:
-                    warned_users.append({"user_id": doc.get("user_id"), "count": doc.get("count", 0)})
-            if not warned_users:
-                await callback_query.answer("📋 No warned users in this group!", show_alert=True)
-            else:
-                lines = ["📋 <b>Warned Users:</b>\n"]
-                for wu in warned_users[:20]:
-                    lines.append(f"• User <code>{wu['user_id']}</code> — {wu['count']} warning(s)")
-                text = "\n".join(lines)
-                await safe_edit_message(
-                    callback_query.message, text,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")]]),
-                    parse_mode="html"
-                )
+            try:
+                # Show warned users list for this chat
+                chat_id = callback_query.message.chat.id
+                print(f"[WARN_LIST] chat_id={chat_id}", flush=True)
+                warned_users = []
+                if warnings_col is not None:
+                    cursor = warnings_col.find({"chat_id": chat_id, "count": {"$gt": 0}})
+                    for doc in cursor:
+                        warned_users.append({"user_id": doc.get("user_id"), "count": doc.get("count", 0)})
+                if not warned_users:
+                    await callback_query.answer("📋 No warned users in this group!", show_alert=True)
+                else:
+                    lines = ["📋 <b>Warned Users:</b>\n"]
+                    for wu in warned_users[:20]:
+                        lines.append(f"• User <code>{wu['user_id']}</code> — {wu['count']} warning(s)")
+                    text = "\n".join(lines)
+                    await safe_edit_message(
+                        callback_query.message, text,
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")]]),
+                        parse_mode="html"
+                    )
+                    await callback_query.answer()
+            except Exception as e:
+                print(f"[WARN_LIST ERROR] {e}", flush=True)
+                await callback_query.answer(f"❌ Error: {e}", show_alert=True)
         elif data.startswith("mod_toggle_blockforward_"):
             chat_id = callback_query.message.chat.id
             enable = data.endswith("_on")
@@ -3466,66 +3486,70 @@ def register_bot_handlers():
             await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
 
         elif data == "warn_mute_dur_menu":
-            # Show mute duration selection submenu
-            chat_id = callback_query.message.chat.id
-            wc = get_warning_config(chat_id)
-            current_dur = wc.get("mute_duration", 3)
-            text = (
-                "🔇⏱ <b>Set Mute Duration</b>\n\n"
-                "Select how long a user will be muted when they exceed the maximum warnings.\n\n"
-                f"<b>Current Duration:</b> {current_dur} hour{'s' if current_dur != 1 else ''}"
-            )
-            durations = [1, 2, 3, 6, 12, 24]
-            dur_buttons_row1 = []
-            dur_buttons_row2 = []
-            for d in durations[:3]:
-                label = f"{d}h ✅" if d == current_dur else f"{d}h"
-                dur_buttons_row1.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
-            for d in durations[3:]:
-                label = f"{d}h ✅" if d == current_dur else f"{d}h"
-                dur_buttons_row2.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
-            keyboard = [
-                dur_buttons_row1,
-                dur_buttons_row2,
-                [InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")],
-            ]
-            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
-            await callback_query.answer()
-        elif data.startswith("warn_mute_dur_"):
-            # Set mute duration
-            chat_id = callback_query.message.chat.id
             try:
+                chat_id = callback_query.message.chat.id
+                print(f"[WARN_MUTE_DUR_MENU] chat_id={chat_id}", flush=True)
+                wc = get_warning_config(chat_id)
+                current_dur = wc.get("mute_duration", 3)
+                text = (
+                    "🔇⏱ <b>Set Mute Duration</b>\n\n"
+                    "Select how long a user will be muted when they exceed the maximum warnings.\n\n"
+                    f"<b>Current Duration:</b> {current_dur} hour{'s' if current_dur != 1 else ''}"
+                )
+                durations = [1, 2, 3, 6, 12, 24]
+                dur_buttons_row1 = []
+                dur_buttons_row2 = []
+                for d in durations[:3]:
+                    label = f"{d}h ✅" if d == current_dur else f"{d}h"
+                    dur_buttons_row1.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
+                for d in durations[3:]:
+                    label = f"{d}h ✅" if d == current_dur else f"{d}h"
+                    dur_buttons_row2.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
+                keyboard = [
+                    dur_buttons_row1,
+                    dur_buttons_row2,
+                    [InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")],
+                ]
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                await callback_query.answer()
+            except Exception as e:
+                print(f"[WARN_MUTE_DUR_MENU ERROR] {e}", flush=True)
+                await callback_query.answer(f"❌ Error: {e}", show_alert=True)
+        elif data.startswith("warn_mute_dur_"):
+            try:
+                chat_id = callback_query.message.chat.id
                 dur = int(data.replace("warn_mute_dur_", ""))
-            except ValueError:
-                dur = 3
-            if dur not in (1, 2, 3, 6, 12, 24):
-                dur = 3
-            wc = get_warning_config(chat_id)
-            wc["mute_duration"] = dur
-            warning_config[chat_id] = wc
-            save_warning_config(chat_id)
-            await callback_query.answer(f"✅ Mute duration set to: {dur}h", show_alert=True)
-            # Re-render mute duration menu
-            text = (
-                "🔇⏱ <b>Set Mute Duration</b>\n\n"
-                "Select how long a user will be muted when they exceed the maximum warnings.\n\n"
-                f"<b>Current Duration:</b> {dur} hour{'s' if dur != 1 else ''}"
-            )
-            durations = [1, 2, 3, 6, 12, 24]
-            dur_buttons_row1 = []
-            dur_buttons_row2 = []
-            for d in durations[:3]:
-                label = f"{d}h ✅" if d == dur else f"{d}h"
-                dur_buttons_row1.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
-            for d in durations[3:]:
-                label = f"{d}h ✅" if d == dur else f"{d}h"
-                dur_buttons_row2.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
-            keyboard = [
-                dur_buttons_row1,
-                dur_buttons_row2,
-                [InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")],
-            ]
-            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+                print(f"[WARN_MUTE_DUR] chat_id={chat_id} dur={dur}", flush=True)
+                if dur not in (1, 2, 3, 6, 12, 24):
+                    dur = 3
+                wc = get_warning_config(chat_id)
+                wc["mute_duration"] = dur
+                warning_config[chat_id] = wc
+                save_warning_config(chat_id)
+                await callback_query.answer(f"✅ Mute duration set to: {dur}h", show_alert=True)
+                text = (
+                    "🔇⏱ <b>Set Mute Duration</b>\n\n"
+                    "Select how long a user will be muted when they exceed the maximum warnings.\n\n"
+                    f"<b>Current Duration:</b> {dur} hour{'s' if dur != 1 else ''}"
+                )
+                durations = [1, 2, 3, 6, 12, 24]
+                dur_buttons_row1 = []
+                dur_buttons_row2 = []
+                for d in durations[:3]:
+                    label = f"{d}h ✅" if d == dur else f"{d}h"
+                    dur_buttons_row1.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
+                for d in durations[3:]:
+                    label = f"{d}h ✅" if d == dur else f"{d}h"
+                    dur_buttons_row2.append(InlineKeyboardButton(label, callback_data=f"warn_mute_dur_{d}"))
+                keyboard = [
+                    dur_buttons_row1,
+                    dur_buttons_row2,
+                    [InlineKeyboardButton("🔙 Back", callback_data="mod_cmd_warnings")],
+                ]
+                await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+            except Exception as e:
+                print(f"[WARN_MUTE_DUR ERROR] {e}", flush=True)
+                await callback_query.answer(f"❌ Error: {e}", show_alert=True)
         elif data == "admin":
             # Verify user access
             if not await verify_user_access(callback_query, client):
