@@ -582,10 +582,13 @@ def is_admin(user_id):
     return user_id in ADMIN_IDS
 
 
-async def safe_edit_message(message, text, reply_markup=None):
+async def safe_edit_message(message, text, reply_markup=None, parse_mode=None):
     """Safely edit message, ignoring MESSAGE_NOT_MODIFIED errors"""
     try:
-        await message.edit_text(text, reply_markup=reply_markup)
+        kwargs = {"reply_markup": reply_markup}
+        if parse_mode:
+            kwargs["parse_mode"] = parse_mode
+        await message.edit_text(text, **kwargs)
     except MessageNotModified:
         pass  # Ignore if message content is the same
     except Exception as e:
@@ -3106,36 +3109,26 @@ def register_bot_handlers():
             if not await verify_user_access(callback_query, client):
                 return
             
+            chat_id = callback_query.message.chat.id
+            mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+            mod_on = mc.get("enabled", False)
+            status_text = "✅ **Moderation is ENABLED**" if mod_on else "❌ **Moderation is DISABLED**"
+            enable_label = "✅ Enable Mod ✅" if mod_on else "✅ Enable Mod"
+            disable_label = "❌ Disable Mod ✅" if not mod_on else "❌ Disable Mod"
+            
             await safe_edit_message(
                 callback_query.message,
-                "🛡️ **Content Moderation**\n\n"
-                "Add bot as admin in your group, then use:\n"
-                "👇 Button press karke command copy karein\n\n"
-                "🔞 **Sex Content Filter:**\n"
-                "Use /blockbadwords to auto-delete:\n"
-                "• Sex messages (sex, porn, xxx, etc.)\n"
-                "• Adult content & Abusive words\n\n"
-                "⚠️ **Auto-Ban System:**\n"
-                "• 3 warnings = Automatic BAN\n"
-                "• Warning given on each violation\n"
+                f"🛡️ **Content Moderation**\n\n"
+                f"{status_text}\n\n"
+                "👇 Buttons se sab set karo, koi command type nahi karna\n\n"
+                "⚠️ **Warning System:**\n"
+                "• Set punishment: Off/Kick/Mute/Ban\n"
                 "• Admins are exempt from all filters",
                 reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("✅ Enable Mod", callback_data="mod_cmd_enablemod"),
-                        InlineKeyboardButton("❌ Disable Mod", callback_data="mod_cmd_disablemod")
-                    ],
-                    [
-                        InlineKeyboardButton("🚫 Block Forward", callback_data="mod_cmd_blockforward"),
-                        InlineKeyboardButton("🔗 Block Links", callback_data="mod_cmd_blocklinks")
-                    ],
-                    [
-                        InlineKeyboardButton("🔞 Block Bad Words", callback_data="mod_cmd_blockbadwords"),
-                        InlineKeyboardButton("👁 Mod Status", callback_data="mod_cmd_modstatus")
-                    ],
-                    [
-                        InlineKeyboardButton("⚠️ Warnings", callback_data="mod_cmd_warnings"),
-                        InlineKeyboardButton("🔄 Reset Warnings", callback_data="mod_cmd_resetwarnings")
-                    ],
+                    [InlineKeyboardButton(enable_label, callback_data="mod_cmd_enablemod"), InlineKeyboardButton(disable_label, callback_data="mod_cmd_disablemod")],
+                    [InlineKeyboardButton("🚫 Block Forward", callback_data="mod_cmd_blockforward"), InlineKeyboardButton("🔗 Block Links", callback_data="mod_cmd_blocklinks")],
+                    [InlineKeyboardButton("🔞 Block Bad Words", callback_data="mod_cmd_blockbadwords"), InlineKeyboardButton("👁 Mod Status", callback_data="mod_cmd_modstatus")],
+                    [InlineKeyboardButton("⚠️ Warnings", callback_data="mod_cmd_warnings"), InlineKeyboardButton("🔄 Reset Warnings", callback_data="mod_cmd_resetwarnings")],
                     [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
                 ])
             )
@@ -3241,15 +3234,86 @@ def register_bot_handlers():
                 await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
                 await callback_query.answer()
 
-            else:
-                cmd_map = {
-                    "mod_cmd_enablemod": "/enablemod",
-                    "mod_cmd_disablemod": "/disablemod",
-                    "mod_cmd_modstatus": "/modstatus",
-                }
-                cmd_text = cmd_map.get(data, "")
-                if cmd_text:
-                    await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
+            elif data == "mod_cmd_enablemod":
+                chat_id = callback_query.message.chat.id
+                mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+                mc["enabled"] = True
+                moderation_config[chat_id] = mc
+                save_moderation_config(chat_id)
+                await callback_query.answer("✅ Moderation Enabled!", show_alert=True)
+                # Re-render moderation menu
+                callback_query.data = "moderation"
+                await safe_edit_message(
+                    callback_query.message,
+                    "🛡️ **Content Moderation**\n\n"
+                    "✅ **Moderation is ENABLED**\n\n"
+                    "Add bot as admin in your group, then use buttons below to configure.\n\n"
+                    "🔞 **Sex Content Filter:**\n"
+                    "Block Bad Words to auto-delete inappropriate content\n\n"
+                    "⚠️ **Warning System:**\n"
+                    "• Set punishment: Off/Kick/Mute/Ban\n"
+                    "• Set max warnings before punishment\n"
+                    "• Admins are exempt from all filters",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Enable Mod ✅", callback_data="mod_cmd_enablemod"), InlineKeyboardButton("❌ Disable Mod", callback_data="mod_cmd_disablemod")],
+                        [InlineKeyboardButton("🚫 Block Forward", callback_data="mod_cmd_blockforward"), InlineKeyboardButton("🔗 Block Links", callback_data="mod_cmd_blocklinks")],
+                        [InlineKeyboardButton("🔞 Block Bad Words", callback_data="mod_cmd_blockbadwords"), InlineKeyboardButton("👁 Mod Status", callback_data="mod_cmd_modstatus")],
+                        [InlineKeyboardButton("⚠️ Warnings", callback_data="mod_cmd_warnings"), InlineKeyboardButton("🔄 Reset Warnings", callback_data="mod_cmd_resetwarnings")],
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                    ])
+                )
+            elif data == "mod_cmd_disablemod":
+                chat_id = callback_query.message.chat.id
+                mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+                mc["enabled"] = False
+                moderation_config[chat_id] = mc
+                save_moderation_config(chat_id)
+                await callback_query.answer("❌ Moderation Disabled!", show_alert=True)
+                await safe_edit_message(
+                    callback_query.message,
+                    "🛡️ **Content Moderation**\n\n"
+                    "❌ **Moderation is DISABLED**\n\n"
+                    "Enable moderation to start protecting your group.\n\n"
+                    "Use buttons below to configure and enable.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Enable Mod", callback_data="mod_cmd_enablemod"), InlineKeyboardButton("❌ Disable Mod ✅", callback_data="mod_cmd_disablemod")],
+                        [InlineKeyboardButton("🚫 Block Forward", callback_data="mod_cmd_blockforward"), InlineKeyboardButton("🔗 Block Links", callback_data="mod_cmd_blocklinks")],
+                        [InlineKeyboardButton("🔞 Block Bad Words", callback_data="mod_cmd_blockbadwords"), InlineKeyboardButton("👁 Mod Status", callback_data="mod_cmd_modstatus")],
+                        [InlineKeyboardButton("⚠️ Warnings", callback_data="mod_cmd_warnings"), InlineKeyboardButton("🔄 Reset Warnings", callback_data="mod_cmd_resetwarnings")],
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
+                    ])
+                )
+            elif data == "mod_cmd_modstatus":
+                chat_id = callback_query.message.chat.id
+                mc = moderation_config.get(chat_id) or load_moderation_config(chat_id)
+                wc = get_warning_config(chat_id)
+                mod_enabled = "✅ ON" if mc.get("enabled") else "❌ OFF"
+                bf = "✅" if mc.get("block_forward") else "❌"
+                bl = "✅" if mc.get("block_links") else "❌"
+                bbw = "✅" if mc.get("block_badwords") else "❌"
+                bm = "✅" if mc.get("block_mentions") else "❌"
+                ad = "✅" if mc.get("auto_delete_2min") else "❌"
+                punishment = wc.get("punishment", "mute").title()
+                max_w = wc.get("max_warns", 3)
+                mute_dur = wc.get("mute_duration", 3)
+                text = (
+                    f"👁 <b>Moderation Status</b>\n\n"
+                    f"<b>Moderation:</b> {mod_enabled}\n"
+                    f"<b>Block Forward:</b> {bf}\n"
+                    f"<b>Block Links:</b> {bl}\n"
+                    f"<b>Block Bad Words:</b> {bbw}\n"
+                    f"<b>Block Mentions:</b> {bm}\n"
+                    f"<b>Auto Delete 2min:</b> {ad}\n\n"
+                    f"<b>Punishment:</b> {punishment}\n"
+                    f"<b>Max Warnings:</b> {max_w}\n"
+                    f"<b>Mute Duration:</b> {mute_dur}h"
+                )
+                await safe_edit_message(
+                    callback_query.message, text,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="moderation")]]),
+                    parse_mode="html"
+                )
+                await callback_query.answer()
         elif data.startswith("warn_p_"):
             chat_id = callback_query.message.chat.id
             p_type = data.replace("warn_p_", "")
@@ -3274,47 +3338,7 @@ def register_bot_handlers():
             await callback_query.answer(f"✅ Max warns set to: {num}", show_alert=True)
             text, markup = build_warnings_menu(chat_id)
             await safe_edit_message(callback_query.message, text, reply_markup=markup, parse_mode="html")
-        elif data.startswith("warn_maxw_"):
-            # Set max warnings
-            chat_id = callback_query.message.chat.id
-            try:
-                num = int(data.replace("warn_maxw_", ""))
-            except ValueError:
-                num = 3
-            wc = get_warning_config(chat_id)
-            wc["max_warns"] = num
-            warning_config[chat_id] = wc
-            save_warning_config(chat_id)
-            await callback_query.answer(f"✅ Max warns set to: {num}", show_alert=True)
-            # Re-render
-            punishment = wc.get("punishment", "mute")
-            max_w = num
-            punishment_labels = {"off": "Off", "kick": "Kick", "mute": "Mute", "ban": "Ban"}
-            current_p = punishment_labels.get(punishment, "Mute")
-            text = (
-                "❗ <b>User warnings</b>\n"
-                "The warning system allows you to give <u>warnings to users</u> for incorrect behavior in the group, before actually punishing them.\n\n"
-                "From this menu you can set:\n"
-                " • the <u>punishment</u> for users who exceed the maximum of warnings allowed\n"
-                " • the <u>maximum number</u> of warns allowed\n\n"
-                f"<b>Punishment:</b> {current_p}\n"
-                f"<b>Max Warns allowed:</b> {max_w}"
-            )
-            max_warn_buttons = []
-            for n in range(2, 7):
-                label = f"{n} ✅" if n == max_w else str(n)
-                max_warn_buttons.append(InlineKeyboardButton(label, callback_data=f"warn_maxw_{n}"))
-            def p_label(key, emoji, lbl):
-                return f"{emoji} {lbl}" if punishment != key else f"{emoji} {lbl} ✅"
-            keyboard = [
-                [InlineKeyboardButton("📋 Warned List", callback_data="warn_list")],
-                [InlineKeyboardButton(p_label("off", "✖", "Off"), callback_data="warn_p_off"), InlineKeyboardButton(p_label("kick", "❗", "Kick"), callback_data="warn_p_kick")],
-                [InlineKeyboardButton(p_label("mute", "🔇", "Mute"), callback_data="warn_p_mute"), InlineKeyboardButton(p_label("ban", "🚫", "Ban"), callback_data="warn_p_ban")],
-                [InlineKeyboardButton("🔇⏱ Set mute duration", callback_data="warn_mute_dur_label")],
-                max_warn_buttons,
-                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
-            ]
-            await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
+        # (duplicate warn_maxw_ removed)
         elif data == "warn_list":
             # Show warned users list for this chat
             chat_id = callback_query.message.chat.id
