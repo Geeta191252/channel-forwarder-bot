@@ -21,7 +21,7 @@ if not hasattr(filters, "supergroup"):
     filters.supergroup = filters.group
 
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPermissions
-from pyrogram.enums import ChatType, ChatMemberStatus
+from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode
 from pyrogram.errors import (
     FloodWait,
     SlowmodeWait,
@@ -586,7 +586,11 @@ async def safe_edit_message(message, text, reply_markup=None, parse_mode=None):
     """Safely edit message, ignoring MESSAGE_NOT_MODIFIED errors"""
     try:
         kwargs = {"reply_markup": reply_markup}
-        if parse_mode:
+        if parse_mode == "html":
+            kwargs["parse_mode"] = ParseMode.HTML
+        elif parse_mode == "markdown":
+            kwargs["parse_mode"] = ParseMode.MARKDOWN
+        elif parse_mode is not None:
             kwargs["parse_mode"] = parse_mode
         await message.edit_text(text, **kwargs)
     except MessageNotModified:
