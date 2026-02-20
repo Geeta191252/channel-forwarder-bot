@@ -6,6 +6,7 @@ import { BulkForward } from "@/components/BulkForward";
 import { ForceJoin } from "@/components/ForceJoin";
 import { AdminGroups } from "@/components/AdminGroups";
 import { ModerationCommands } from "@/components/ModerationCommands";
+import { BotMenuButtons } from "@/components/BotMenuButtons";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -112,6 +113,7 @@ const Index = () => {
 
           <AdminGroups botApiUrl={botApiUrl} />
 
+          <BotMenuButtons />
           <ForceJoin />
           <ModerationCommands />
         </div>
