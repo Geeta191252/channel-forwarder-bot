@@ -423,14 +423,17 @@ def save_moderation_config(chat_id):
 
 
 def contains_link(text):
-    """Check if text contains any URL/link (not @mentions)"""
+    """Check if text contains any URL/link or @username mentions"""
     import re
     url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
     tg_pattern = r'(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+'
+    mention_pattern = r'@[a-zA-Z0-9_]{3,}'
     
     if re.search(url_pattern, text, re.IGNORECASE):
         return True
     if re.search(tg_pattern, text, re.IGNORECASE):
+        return True
+    if re.search(mention_pattern, text):
         return True
     return False
 
