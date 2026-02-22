@@ -8,7 +8,7 @@ import signal
 import sys
 from datetime import datetime
 from flask import Flask, request, jsonify
-from pyrogram import Client, filters, idle, StopPropagation
+from pyrogram import Client, filters, idle, StopPropagation, enums
 
 try:
     sys.stdout.reconfigure(line_buffering=True)
@@ -435,12 +435,19 @@ def contains_link(text):
     return False
 
 
-def contains_mention(text):
-    """Check if text contains @username mentions"""
+def contains_mention(text, message=None):
+    """Check if text contains @username mentions (text pattern + Telegram entities)"""
     import re
-    # Match @username pattern (at least 3 characters after @)
-    mention_pattern = r'@[a-zA-Z0-9_]{3,}'
-    return bool(re.search(mention_pattern, text))
+    # Check text pattern
+    mention_pattern = r'@[a-zA-Z0-9_]{1,}'
+    if re.search(mention_pattern, text):
+        return True
+    # Also check Telegram message entities for mentions
+    if message and hasattr(message, "entities") and message.entities:
+        for entity in message.entities:
+            if entity.type in (enums.MessageEntityType.MENTION, enums.MessageEntityType.TEXT_MENTION):
+                return True
+    return False
 
 
 def contains_bad_words(text):
@@ -6629,7 +6636,7 @@ def register_bot_handlers():
                 # Refresh cache
                 try:
                     admin_ids_set = set()
-                    async for member in client.get_chat_members(chat_id, filter="administrators"):
+                    async for member in client.get_chat_members(chat_id, filter=enums.ChatMembersFilter.ADMINISTRATORS):
                         if member.user:
                             admin_ids_set.add(member.user.id)
                     GROUP_ADMIN_CACHE[chat_id] = {"ts": time.time(), "ids": admin_ids_set}
@@ -6809,7 +6816,7 @@ def register_bot_handlers():
                 return
             
             # Check for @mentions
-            if config.get("block_mentions") and text and contains_mention(text):
+            if config.get("block_mentions") and text and contains_mention(text, message):
                 await message.delete()
                 moderation_stats["deleted_mentions"] += 1
                 await add_warning_and_check_ban("@mentions not allowed")
