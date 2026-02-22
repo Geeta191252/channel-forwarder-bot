@@ -6653,6 +6653,9 @@ def register_bot_handlers():
                     except Exception:
                         # On failure, assume NOT admin and proceed with moderation
                         print(f"[DEBUG] Cannot verify admin status for {user_id}, proceeding with moderation", flush=True)
+        except Exception as outer_err:
+            # On any outer failure, assume NOT admin and proceed
+            print(f"[DEBUG] Outer admin check failed for {user_id}: {outer_err}", flush=True)
         
         async def add_warning_and_check_ban(reason):
             """Add warning to user and punish if exceeded limit"""
