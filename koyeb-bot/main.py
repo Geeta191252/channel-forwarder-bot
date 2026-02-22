@@ -2319,10 +2319,16 @@ def register_bot_handlers():
             message.stop_propagation()
             return
 
-        # /mentionall - tag all group members
+        # /mentionall - tag all group members (ADMIN ONLY)
         if _is_cmd(text, "mentionall"):
             is_admin_user, user_id = await check_group_admin(client, message)
             if not is_admin_user:
+                await message.reply(
+                    "❌ **Sirf Admin hi yeh command use kar sakta hai!**\n\n"
+                    "Aapko group ka admin hona zaroori hai `/mentionall` command use karne ke liye.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                message.stop_propagation()
                 return
             try:
                 members = []
