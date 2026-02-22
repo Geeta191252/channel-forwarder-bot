@@ -43,7 +43,7 @@ from PIL import Image, ImageDraw, ImageFont
 from translations import TRANSLATIONS, t, get_user_lang
 
 # Build marker (changes on each code update) to verify Koyeb is running the latest image
-BUILD_MARKER = "2025-12-24T22:20:00Z"
+BUILD_MARKER = "2026-02-22T15:00:00Z"
 print(f"✅ BOT BUILD_MARKER: {BUILD_MARKER}", flush=True)
 
 load_dotenv()
@@ -423,17 +423,14 @@ def save_moderation_config(chat_id):
 
 
 def contains_link(text):
-    """Check if text contains any URL/link or @username mentions"""
+    """Check if text contains any URL/link (NOT @username mentions - those are handled separately)"""
     import re
     url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
     tg_pattern = r'(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+'
-    mention_pattern = r'@[a-zA-Z0-9_]{3,}'
     
     if re.search(url_pattern, text, re.IGNORECASE):
         return True
     if re.search(tg_pattern, text, re.IGNORECASE):
-        return True
-    if re.search(mention_pattern, text):
         return True
     return False
 
@@ -2197,8 +2194,8 @@ def register_bot_handlers():
             
             if chat_id not in moderation_config:
                 moderation_config[chat_id] = load_moderation_config(chat_id)
-            current = moderation_config[chat_id].get("block_mention", False)
-            moderation_config[chat_id]["block_mention"] = not current
+            current = moderation_config[chat_id].get("block_mentions", False)
+            moderation_config[chat_id]["block_mentions"] = not current
             moderation_config[chat_id]["enabled"] = True
             save_moderation_config(chat_id)
             
@@ -2239,7 +2236,7 @@ def register_bot_handlers():
                 f"**Block Forwards:** {'🟢 ON' if cfg.get('block_forward') else '🔴 OFF'}\n"
                 f"**Block Links:** {'🟢 ON' if cfg.get('block_links') else '🔴 OFF'}\n"
                 f"**Block Bad Words:** {'🟢 ON' if cfg.get('block_badwords') else '🔴 OFF'}\n"
-                f"**Block Mentions:** {'🟢 ON' if cfg.get('block_mention') else '🔴 OFF'}\n"
+                f"**Block Mentions:** {'🟢 ON' if cfg.get('block_mentions') else '🔴 OFF'}\n"
                 f"**Auto-Delete 2min:** {'🟢 ON' if cfg.get('auto_delete_2min') else '🔴 OFF'}"
             )
             message.stop_propagation()
@@ -6620,49 +6617,42 @@ def register_bot_handlers():
         if user_id in ADMIN_IDS:
             return
         
-        # Skip if user is admin/owner (admins are exempt from moderation)
+        # Skip if user is admin/owner (use cache to avoid API rate limits)
+        is_admin_or_owner = False
         try:
-            member = await client.get_chat_member(chat_id, user_id)
-            
-            # Check if user is admin or owner using multiple methods
-            is_admin_or_owner = False
-            
-            # Method 1: Check class name (ChatMemberOwner, ChatMemberAdministrator)
-            cls_name = member.__class__.__name__ if member else ""
-            if "Owner" in cls_name or "Administrator" in cls_name or "Admin" in cls_name:
-                is_admin_or_owner = True
-            
-            # Method 2: Check if privileges exist (admins have this)
-            if not is_admin_or_owner and hasattr(member, "privileges") and member.privileges is not None:
-                is_admin_or_owner = True
-            
-            # Method 3: Check status attribute (covers various Pyrogram versions)
-            if not is_admin_or_owner and hasattr(member, "status"):
-                status = member.status
-                # Handle both enum and string status
-                status_str = str(status.value if hasattr(status, "value") else status).lower()
-                if any(x in status_str for x in ["creator", "owner", "admin", "administrator"]):
-                    is_admin_or_owner = True
-            
-            # Method 4: Direct ChatMember type check using pyrogram types
-            if not is_admin_or_owner:
+            # Check cache first
+            cached = GROUP_ADMIN_CACHE.get(chat_id)
+            if cached and (time.time() - cached["ts"]) < GROUP_ADMIN_CACHE_TTL:
+                if user_id in cached["ids"]:
+                    return
+            else:
+                # Refresh cache
                 try:
-                    from pyrogram.types import ChatMemberOwner, ChatMemberAdministrator
-                    if isinstance(member, (ChatMemberOwner, ChatMemberAdministrator)):
-                        is_admin_or_owner = True
-                except ImportError:
-                    pass
-            
-            if is_admin_or_owner:
-                return
-            
-            # Debug log for non-exempt users
-            print(f"[DEBUG] moderation: user_id={user_id} cls={cls_name} is_admin={is_admin_or_owner}", flush=True)
-            
-        except Exception as e:
-            # If we can't verify role, skip moderation to avoid false warnings
-            print(f"[DEBUG] Cannot verify admin status for {user_id}: {e}", flush=True)
-            return
+                    admin_ids_set = set()
+                    async for member in client.get_chat_members(chat_id, filter="administrators"):
+                        if member.user:
+                            admin_ids_set.add(member.user.id)
+                    GROUP_ADMIN_CACHE[chat_id] = {"ts": time.time(), "ids": admin_ids_set}
+                    if user_id in admin_ids_set:
+                        return
+                except Exception as cache_err:
+                    print(f"[DEBUG] Admin cache refresh failed for {chat_id}: {cache_err}", flush=True)
+                    # Fallback: single user check
+                    try:
+                        member = await client.get_chat_member(chat_id, user_id)
+                        cls_name = member.__class__.__name__ if member else ""
+                        if "Owner" in cls_name or "Administrator" in cls_name or "Admin" in cls_name:
+                            return
+                        if hasattr(member, "privileges") and member.privileges is not None:
+                            return
+                        if hasattr(member, "status"):
+                            status = member.status
+                            status_str = str(status.value if hasattr(status, "value") else status).lower()
+                            if any(x in status_str for x in ["creator", "owner", "admin", "administrator"]):
+                                return
+                    except Exception:
+                        # On failure, assume NOT admin and proceed with moderation
+                        print(f"[DEBUG] Cannot verify admin status for {user_id}, proceeding with moderation", flush=True)
         
         async def add_warning_and_check_ban(reason):
             """Add warning to user and punish if exceeded limit"""
