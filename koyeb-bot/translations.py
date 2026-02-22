@@ -1,6 +1,9 @@
 # Multi-language translations for the Telegram bot
 # All 33 supported languages
 
+# User language preferences {user_id: "lang_code"}
+user_languages = {}
+
 TRANSLATIONS = {
     # ===== WELCOME / START =====
     "welcome": {
