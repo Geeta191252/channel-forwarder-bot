@@ -3215,59 +3215,13 @@ def register_bot_handlers():
             )
             await callback_query.answer()
         elif data == "mention_all":
-            # Mention all group members from inline button
-            if not await verify_user_access(callback_query, client):
-                return
-            
-            # Get the target group chat_id from the select_group context
-            chat_id = callback_query.message.chat.id
-            user_id = callback_query.from_user.id
-            
-            await callback_query.answer("📣 Mentioning all members...", show_alert=True)
-            
-            try:
-                members = []
-                async for member in client.get_chat_members(chat_id):
-                    user = member.user
-                    if user and not user.is_bot and not user.is_deleted:
-                        members.append(user)
-                
-                if not members:
-                    await safe_edit_message(
-                        callback_query.message,
-                        "❌ No members found in this group.",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_main")]])
-                    )
-                    return
-                
-                # Send mentions in batches of 50
-                batch_size = 50
-                total = len(members)
-                sent = 0
-                for i in range(0, total, batch_size):
-                    batch = members[i:i+batch_size]
-                    mention_text = ""
-                    for user in batch:
-                        name = user.first_name or "User"
-                        mention_text += f"[{name}](tg://user?id={user.id}) "
-                    
-                    await client.send_message(chat_id, mention_text, parse_mode=ParseMode.MARKDOWN)
-                    sent += len(batch)
-                    
-                    if sent < total:
-                        await asyncio.sleep(1)
-                
-                await safe_edit_message(
-                    callback_query.message,
-                    f"✅ **Mentioned {total} members!**",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_main")]])
-                )
-            except Exception as e:
-                print(f"[MENTION_ALL] Error: {e}", flush=True)
-                await safe_edit_message(
-                    callback_query.message,
-                    f"❌ Error: {e}",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_main")]])
+            await callback_query.answer(
+                "📣 Mention All\n\n"
+                "Command: /mentionall\n\n"
+                "👉 Yeh command apne group mein send karo.\n"
+                "Bot group ke sab members ko blue tick mention ke sath tag karega.",
+                show_alert=True
+            )
                 )
         elif data == "moderation":
             # Verify user access
