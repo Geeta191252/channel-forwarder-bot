@@ -40,6 +40,7 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
 from PIL import Image, ImageDraw, ImageFont
+from translations import TRANSLATIONS, t, get_user_lang
 
 # Build marker (changes on each code update) to verify Koyeb is running the latest image
 BUILD_MARKER = "2025-12-24T22:20:00Z"
@@ -168,8 +169,31 @@ DELAY_BETWEEN_MESSAGES = 0.1  # 100ms between individual messages
 is_forwarding = False
 stop_requested = False
 
-# User language preferences {user_id: "lang_code"}
-user_languages = {}
+# User language preferences {user_id: "lang_code"} - imported from translations.py
+from translations import user_languages
+
+# Language collection in MongoDB
+lang_col = db["user_languages"] if db is not None else None
+
+def load_user_language(user_id):
+    """Load user language from DB"""
+    if lang_col is not None:
+        doc = lang_col.find_one({"user_id": user_id})
+        if doc:
+            user_languages[user_id] = doc.get("lang", "en")
+            return doc.get("lang", "en")
+    return "en"
+
+def save_user_language(user_id, lang_code):
+    """Save user language to DB"""
+    user_languages[user_id] = lang_code
+    if lang_col is not None:
+        lang_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"user_id": user_id, "lang": lang_code, "updated_at": datetime.utcnow()}},
+            upsert=True,
+        )
+
 current_progress = {
     "success_count": 0,
     "failed_count": 0,
@@ -2426,6 +2450,10 @@ def register_bot_handlers():
         if not user_id:
             return await message.reply("❌ Couldn't read your user id. Please try again.")
 
+        # Load user language from DB if not in memory
+        if user_id not in user_languages:
+            load_user_language(user_id)
+
         # Bot username (used for referral links) — keep it resilient
         bot_username = ""
         try:
@@ -2548,8 +2576,15 @@ def register_bot_handlers():
             ]
         ])
 
-    async def show_main_menu(client, message):
+    async def show_main_menu(client, message, user_id=None):
         """Show welcome message with Add to Group + Manage Settings buttons"""
+        if user_id is None:
+            user_id = message.from_user.id if message.from_user else 0
+        
+        # Load user language if not cached
+        if user_id and user_id not in user_languages:
+            load_user_language(user_id)
+
         try:
             bot_info = await client.get_me()
             bot_username = bot_info.username or ""
@@ -2560,27 +2595,21 @@ def register_bot_handlers():
         
         keyboard_buttons = []
         if add_group_url:
-            keyboard_buttons.append([InlineKeyboardButton("➕ Add me to a Group ➕", url=add_group_url)])
-        keyboard_buttons.append([InlineKeyboardButton("⚙️ Manage Group Settings ✍️", callback_data="manage_settings")])
+            keyboard_buttons.append([InlineKeyboardButton(t(user_id, "btn_add_group"), url=add_group_url)])
+        keyboard_buttons.append([InlineKeyboardButton(t(user_id, "btn_settings"), callback_data="manage_settings")])
         keyboard_buttons.append([
-            InlineKeyboardButton("👥 Group", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me"),
-            InlineKeyboardButton("📢 Channel", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me")
+            InlineKeyboardButton(t(user_id, "btn_group"), url=f"https://t.me/{bot_username}" if bot_username else "https://t.me"),
+            InlineKeyboardButton(t(user_id, "btn_channel"), url=f"https://t.me/{bot_username}" if bot_username else "https://t.me")
         ])
         keyboard_buttons.append([
-            InlineKeyboardButton("🆘 Support", callback_data="support_info"),
-            InlineKeyboardButton("💬 Information", callback_data="bot_info")
+            InlineKeyboardButton(t(user_id, "btn_support"), callback_data="support_info"),
+            InlineKeyboardButton(t(user_id, "btn_info"), callback_data="bot_info")
         ])
-        keyboard_buttons.append([InlineKeyboardButton("🇬🇧 Languages 🇬🇧", callback_data="languages")])
+        keyboard_buttons.append([InlineKeyboardButton(t(user_id, "btn_languages"), callback_data="languages")])
         
         keyboard = InlineKeyboardMarkup(keyboard_buttons)
         
-        msg_text = (
-            f"👋 **Hello!**\n"
-            f"**Group Help** is **the most complete** Bot to help you **manage** your groups easily and **safely**!\n\n"
-            f"👉 **Add me in a Supergroup** and promote me as **Admin** to let me get in action!\n\n"
-            f"❓ **WHICH ARE THE COMMANDS?** ❓\n"
-            f"Press /help to see **all the commands** and how they work!"
-        )
+        msg_text = t(user_id, "welcome")
         
         await message.reply(msg_text, reply_markup=keyboard)
     
@@ -2771,6 +2800,10 @@ def register_bot_handlers():
         
         # Handle "Back to Start" button
         if data == "back_to_start":
+            user_id = callback_query.from_user.id
+            if user_id not in user_languages:
+                load_user_language(user_id)
+
             try:
                 bot_info = await client.get_me()
                 bot_username = bot_info.username or ""
@@ -2781,25 +2814,19 @@ def register_bot_handlers():
             
             keyboard_buttons = []
             if add_group_url:
-                keyboard_buttons.append([InlineKeyboardButton("➕ Add me to a Group ➕", url=add_group_url)])
-            keyboard_buttons.append([InlineKeyboardButton("⚙️ Manage Group Settings ✍️", callback_data="manage_settings")])
+                keyboard_buttons.append([InlineKeyboardButton(t(user_id, "btn_add_group"), url=add_group_url)])
+            keyboard_buttons.append([InlineKeyboardButton(t(user_id, "btn_settings"), callback_data="manage_settings")])
             keyboard_buttons.append([
-                InlineKeyboardButton("👥 Group", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me"),
-                InlineKeyboardButton("📢 Channel", url=f"https://t.me/{bot_username}" if bot_username else "https://t.me")
+                InlineKeyboardButton(t(user_id, "btn_group"), url=f"https://t.me/{bot_username}" if bot_username else "https://t.me"),
+                InlineKeyboardButton(t(user_id, "btn_channel"), url=f"https://t.me/{bot_username}" if bot_username else "https://t.me")
             ])
             keyboard_buttons.append([
-                InlineKeyboardButton("🆘 Support", callback_data="support_info"),
-                InlineKeyboardButton("💬 Information", callback_data="bot_info")
+                InlineKeyboardButton(t(user_id, "btn_support"), callback_data="support_info"),
+                InlineKeyboardButton(t(user_id, "btn_info"), callback_data="bot_info")
             ])
-            keyboard_buttons.append([InlineKeyboardButton("🇬🇧 Languages 🇬🇧", callback_data="languages")])
+            keyboard_buttons.append([InlineKeyboardButton(t(user_id, "btn_languages"), callback_data="languages")])
             
-            msg_text = (
-                f"👋 **Hello!**\n"
-                f"**Group Help** is **the most complete** Bot to help you **manage** your groups easily and **safely**!\n\n"
-                f"👉 **Add me in a Supergroup** and promote me as **Admin** to let me get in action!\n\n"
-                f"❓ **WHICH ARE THE COMMANDS?** ❓\n"
-                f"Press /help to see **all the commands** and how they work!"
-            )
+            msg_text = t(user_id, "welcome")
             
             await safe_edit_message(
                 callback_query.message,
@@ -4044,10 +4071,14 @@ def register_bot_handlers():
                 [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
             ]
             
+            user_id = callback_query.from_user.id
+            if user_id not in user_languages:
+                load_user_language(user_id)
+            header = t(user_id, "choose_language") or "🌍 <b>Choose your language</b>"
+            
             await safe_edit_message(
                 callback_query.message,
-                "🇬🇧 <b>Choose your language</b>\n"
-                "🇮🇹 Scegli la tua lingua",
+                header,
                 reply_markup=InlineKeyboardMarkup(lang_buttons),
                 parse_mode="html"
             )
@@ -4092,8 +4123,18 @@ def register_bot_handlers():
             if info:
                 lang_name, lang_code = info
                 user_id = callback_query.from_user.id
-                user_languages[user_id] = lang_code
-                await callback_query.answer(f"✅ {lang_name} selected!", show_alert=True)
+                save_user_language(user_id, lang_code)
+                
+                # Show confirmation message with back button in selected language
+                confirm_text = t(user_id, "lang_selected")
+                back_btn = InlineKeyboardButton(t(user_id, "btn_back"), callback_data="back_to_start")
+                
+                await safe_edit_message(
+                    callback_query.message,
+                    confirm_text,
+                    reply_markup=InlineKeyboardMarkup([[back_btn]])
+                )
+                await callback_query.answer()
         elif data.startswith("hcmd_"):
             hcmd_map = {
                 "hcmd_start": "/start",
