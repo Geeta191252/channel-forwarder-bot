@@ -285,7 +285,7 @@ def build_warnings_menu(chat_id):
         ],
         [InlineKeyboardButton(f"🔇⏱ Set mute duration ({mute_dur}h)", callback_data="warn_mute_dur_menu")],
         max_warn_buttons,
-        [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
     ]
     return text, InlineKeyboardMarkup(keyboard)
 
@@ -2469,17 +2469,26 @@ def register_bot_handlers():
             ],
             [
                 InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
-                InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
+                InlineKeyboardButton("🆘 @Admin", callback_data="admin")
             ],
             [
-                InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
-                InlineKeyboardButton("📥 Join Request", callback_data="join_request")
+                InlineKeyboardButton("🚫 Block Forward", callback_data="mod_cmd_blockforward"),
+                InlineKeyboardButton("🔗 Block Links", callback_data="mod_cmd_blocklinks")
             ],
             [
-                InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
-                InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+                InlineKeyboardButton("🔞 Block Bad Words", callback_data="mod_cmd_blockbadwords"),
+                InlineKeyboardButton("👁 Mod Status", callback_data="mod_cmd_modstatus")
             ],
             [
+                InlineKeyboardButton("⚠️ Warnings", callback_data="mod_cmd_warnings"),
+                InlineKeyboardButton("🔄 Reset Warnings", callback_data="mod_cmd_resetwarnings")
+            ],
+            [
+                InlineKeyboardButton("📥 Join Request", callback_data="join_request"),
+                InlineKeyboardButton("📁 File Logo", callback_data="file_logo")
+            ],
+            [
+                InlineKeyboardButton("👥 Referral", callback_data="my_referral"),
                 InlineKeyboardButton("❓ Help", callback_data="help")
             ],
             [
@@ -3114,17 +3123,26 @@ def register_bot_handlers():
                 ],
                 [
                     InlineKeyboardButton("🔍 Filters", callback_data="filters_menu"),
-                    InlineKeyboardButton("🛡️ Moderation", callback_data="moderation")
+                    InlineKeyboardButton("🆘 @Admin", callback_data="admin")
                 ],
                 [
-                    InlineKeyboardButton("🆘 @Admin", callback_data="admin"),
-                    InlineKeyboardButton("📥 Join Request", callback_data="join_request")
+                    InlineKeyboardButton("🚫 Block Forward", callback_data="mod_cmd_blockforward"),
+                    InlineKeyboardButton("🔗 Block Links", callback_data="mod_cmd_blocklinks")
                 ],
                 [
-                    InlineKeyboardButton("📁 File Logo", callback_data="file_logo"),
-                    InlineKeyboardButton("👥 Referral", callback_data="my_referral")
+                    InlineKeyboardButton("🔞 Block Bad Words", callback_data="mod_cmd_blockbadwords"),
+                    InlineKeyboardButton("👁 Mod Status", callback_data="mod_cmd_modstatus")
                 ],
                 [
+                    InlineKeyboardButton("⚠️ Warnings", callback_data="mod_cmd_warnings"),
+                    InlineKeyboardButton("🔄 Reset Warnings", callback_data="mod_cmd_resetwarnings")
+                ],
+                [
+                    InlineKeyboardButton("📥 Join Request", callback_data="join_request"),
+                    InlineKeyboardButton("📁 File Logo", callback_data="file_logo")
+                ],
+                [
+                    InlineKeyboardButton("👥 Referral", callback_data="my_referral"),
                     InlineKeyboardButton("❓ Help", callback_data="help")
                 ]
             ])
@@ -3214,7 +3232,7 @@ def register_bot_handlers():
                         InlineKeyboardButton(bf_label("mute", "🔇", "Mute"), callback_data="bf_p_mute"),
                         InlineKeyboardButton(bf_label("ban", "🚫", "Ban"), callback_data="bf_p_ban"),
                     ],
-                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                 ]
                 await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
                 await callback_query.answer()
@@ -3246,7 +3264,7 @@ def register_bot_handlers():
                         InlineKeyboardButton(bl_label("mute", "🔇", "Mute"), callback_data="bl_p_mute"),
                         InlineKeyboardButton(bl_label("ban", "🚫", "Ban"), callback_data="bl_p_ban"),
                     ],
-                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                 ]
                 await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
                 await callback_query.answer()
@@ -3278,7 +3296,7 @@ def register_bot_handlers():
                         InlineKeyboardButton(bbw_label("mute", "🔇", "Mute"), callback_data="bbw_p_mute"),
                         InlineKeyboardButton(bbw_label("ban", "🚫", "Ban"), callback_data="bbw_p_ban"),
                     ],
-                    [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                 ]
                 await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
                 await callback_query.answer()
@@ -3299,7 +3317,7 @@ def register_bot_handlers():
                         "<code>/resetwarnings @username</code> to reset a specific user."
                     )
                     keyboard = [
-                        [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                     ]
                 else:
                     lines = ["🔄 <b>Reset Warnings</b>\n\n📋 <b>Warned Users:</b>\n"]
@@ -3310,7 +3328,7 @@ def register_bot_handlers():
                     text = "\n".join(lines)
                     keyboard = [
                         [InlineKeyboardButton("🗑 Reset ALL Warnings", callback_data="mod_reset_all_warnings")],
-                        [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                     ]
                 await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
                 await callback_query.answer()
@@ -3391,7 +3409,7 @@ def register_bot_handlers():
                 )
                 await safe_edit_message(
                     callback_query.message, text,
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="moderation")]]),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_main")]]),
                     parse_mode="html"
                 )
                 await callback_query.answer()
@@ -3495,7 +3513,7 @@ def register_bot_handlers():
                     InlineKeyboardButton(bf_label2("mute", "🔇", "Mute"), callback_data="bf_p_mute"),
                     InlineKeyboardButton(bf_label2("ban", "🚫", "Ban"), callback_data="bf_p_ban"),
                 ],
-                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
             ]
             await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
 
@@ -3533,7 +3551,7 @@ def register_bot_handlers():
                     InlineKeyboardButton(bl_label2("mute", "🔇", "Mute"), callback_data="bl_p_mute"),
                     InlineKeyboardButton(bl_label2("ban", "🚫", "Ban"), callback_data="bl_p_ban"),
                 ],
-                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
             ]
             await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
 
@@ -3571,7 +3589,7 @@ def register_bot_handlers():
                     InlineKeyboardButton(bbw_label2("mute", "🔇", "Mute"), callback_data="bbw_p_mute"),
                     InlineKeyboardButton(bbw_label2("ban", "🚫", "Ban"), callback_data="bbw_p_ban"),
                 ],
-                [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
             ]
             await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
 
@@ -3621,7 +3639,7 @@ def register_bot_handlers():
                             [InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockforward_on"), InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockforward_off")],
                             [InlineKeyboardButton(bf_lbl("off", "✖", "Off"), callback_data="bf_p_off"), InlineKeyboardButton(bf_lbl("kick", "❗", "Kick"), callback_data="bf_p_kick")],
                             [InlineKeyboardButton(bf_lbl("mute", "🔇", "Mute"), callback_data="bf_p_mute"), InlineKeyboardButton(bf_lbl("ban", "🚫", "Ban"), callback_data="bf_p_ban")],
-                            [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                            [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                         ]
                     elif re_render == "mod_cmd_blocklinks":
                         status = mc.get("block_links", False)
@@ -3639,7 +3657,7 @@ def register_bot_handlers():
                             [InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blocklinks_on"), InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blocklinks_off")],
                             [InlineKeyboardButton(bl_lbl("off", "✖", "Off"), callback_data="bl_p_off"), InlineKeyboardButton(bl_lbl("kick", "❗", "Kick"), callback_data="bl_p_kick")],
                             [InlineKeyboardButton(bl_lbl("mute", "🔇", "Mute"), callback_data="bl_p_mute"), InlineKeyboardButton(bl_lbl("ban", "🚫", "Ban"), callback_data="bl_p_ban")],
-                            [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                            [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                         ]
                     else:
                         status = mc.get("block_badwords", False)
@@ -3657,7 +3675,7 @@ def register_bot_handlers():
                             [InlineKeyboardButton(f"✅ Enable{' ✅' if status else ''}", callback_data="mod_toggle_blockbadwords_on"), InlineKeyboardButton(f"❌ Disable{' ✅' if not status else ''}", callback_data="mod_toggle_blockbadwords_off")],
                             [InlineKeyboardButton(bbw_lbl("off", "✖", "Off"), callback_data="bbw_p_off"), InlineKeyboardButton(bbw_lbl("kick", "❗", "Kick"), callback_data="bbw_p_kick")],
                             [InlineKeyboardButton(bbw_lbl("mute", "🔇", "Mute"), callback_data="bbw_p_mute"), InlineKeyboardButton(bbw_lbl("ban", "🚫", "Ban"), callback_data="bbw_p_ban")],
-                            [InlineKeyboardButton("🔙 Back", callback_data="moderation")],
+                            [InlineKeyboardButton("🔙 Back", callback_data="back_main")],
                         ]
                     await safe_edit_message(callback_query.message, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="html")
                 else:
