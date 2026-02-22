@@ -2538,7 +2538,7 @@ def register_bot_handlers():
             ],
             [
                 InlineKeyboardButton("👥 Referral", callback_data="my_referral"),
-                InlineKeyboardButton("❓ Help", callback_data="help")
+                InlineKeyboardButton("🇬🇧 Languages", callback_data="languages")
             ],
             [
                 InlineKeyboardButton("🔙 Back", callback_data="manage_settings")
@@ -2567,7 +2567,7 @@ def register_bot_handlers():
             InlineKeyboardButton("🆘 Support", callback_data="support_info"),
             InlineKeyboardButton("💬 Information", callback_data="bot_info")
         ])
-        keyboard_buttons.append([InlineKeyboardButton("❓ Help", callback_data="help")])
+        keyboard_buttons.append([InlineKeyboardButton("🇬🇧 Languages 🇬🇧", callback_data="languages")])
         
         keyboard = InlineKeyboardMarkup(keyboard_buttons)
         
@@ -2788,7 +2788,7 @@ def register_bot_handlers():
                 InlineKeyboardButton("🆘 Support", callback_data="support_info"),
                 InlineKeyboardButton("💬 Information", callback_data="bot_info")
             ])
-            keyboard_buttons.append([InlineKeyboardButton("❓ Help", callback_data="help")])
+            keyboard_buttons.append([InlineKeyboardButton("🇬🇧 Languages 🇬🇧", callback_data="languages")])
             
             msg_text = (
                 f"👋 **Hello!**\n"
@@ -3195,7 +3195,7 @@ def register_bot_handlers():
                 ],
                 [
                     InlineKeyboardButton("👥 Referral", callback_data="my_referral"),
-                    InlineKeyboardButton("❓ Help", callback_data="help")
+                    InlineKeyboardButton("🇬🇧 Languages", callback_data="languages")
                 ]
             ])
             
@@ -3971,40 +3971,54 @@ def register_bot_handlers():
             cmd_text = lcmd_map.get(data, "")
             if cmd_text:
                 await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
-        elif data == "help":
-            user_id = callback_query.from_user.id
-            
-            help_buttons = [
+        elif data == "languages":
+            lang_buttons = [
                 [
-                    InlineKeyboardButton("▶️ Start", callback_data="hcmd_start"),
-                    InlineKeyboardButton("📤 Forward", callback_data="hcmd_forward")
+                    InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+                    InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
                 ],
                 [
-                    InlineKeyboardButton("⏸ Stop", callback_data="hcmd_stop"),
-                    InlineKeyboardButton("📊 Progress", callback_data="hcmd_progress")
+                    InlineKeyboardButton("🇮🇳 हिन्दी", callback_data="lang_hi"),
+                    InlineKeyboardButton("🇵🇰 اردو", callback_data="lang_ur")
                 ],
                 [
-                    InlineKeyboardButton("📡 Status", callback_data="hcmd_status"),
-                    InlineKeyboardButton("🔄 Resume", callback_data="hcmd_resume")
+                    InlineKeyboardButton("🇪🇸 Español", callback_data="lang_es"),
+                    InlineKeyboardButton("🇫🇷 Français", callback_data="lang_fr")
                 ],
+                [
+                    InlineKeyboardButton("🇮🇩 Bahasa", callback_data="lang_id"),
+                    InlineKeyboardButton("🇹🇷 Türkçe", callback_data="lang_tr")
+                ],
+                [
+                    InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
+                    InlineKeyboardButton("🇧🇷 Português", callback_data="lang_pt")
+                ],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
             ]
-            
-            if user_id in ADMIN_IDS:
-                help_buttons.append([
-                    InlineKeyboardButton("⚙️ Set Config", callback_data="hcmd_setconfig"),
-                    InlineKeyboardButton("👥 Accounts", callback_data="hcmd_accounts")
-                ])
-            
-            help_buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_main")])
             
             await safe_edit_message(
                 callback_query.message,
-                "❓ <b>Help Menu</b>\n\n"
-                "👇 Button press karke command dekho:",
-                reply_markup=InlineKeyboardMarkup(help_buttons),
+                "🇬🇧 <b>Languages</b> 🇬🇧\n\n"
+                "👇 Apni language select karo:",
+                reply_markup=InlineKeyboardMarkup(lang_buttons),
                 parse_mode="html"
             )
             await callback_query.answer()
+        elif data.startswith("lang_"):
+            lang_map = {
+                "lang_en": "🇬🇧 English",
+                "lang_ar": "🇸🇦 العربية (Arabic)",
+                "lang_hi": "🇮🇳 हिन्दी (Hindi)",
+                "lang_ur": "🇵🇰 اردو (Urdu)",
+                "lang_es": "🇪🇸 Español (Spanish)",
+                "lang_fr": "🇫🇷 Français (French)",
+                "lang_id": "🇮🇩 Bahasa (Indonesian)",
+                "lang_tr": "🇹🇷 Türkçe (Turkish)",
+                "lang_ru": "🇷🇺 Русский (Russian)",
+                "lang_pt": "🇧🇷 Português (Portuguese)"
+            }
+            selected = lang_map.get(data, "Unknown")
+            await callback_query.answer(f"✅ Language selected: {selected}\n\nAbhi sirf English available hai. Jald hi aur languages add hongi!", show_alert=True)
         elif data.startswith("hcmd_"):
             hcmd_map = {
                 "hcmd_start": "/start",
