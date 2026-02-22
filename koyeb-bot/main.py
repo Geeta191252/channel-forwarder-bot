@@ -167,6 +167,9 @@ DELAY_BETWEEN_MESSAGES = 0.1  # 100ms between individual messages
 # Global state
 is_forwarding = False
 stop_requested = False
+
+# User language preferences {user_id: "lang_code"}
+user_languages = {}
 current_progress = {
     "success_count": 0,
     "failed_count": 0,
@@ -3973,52 +3976,124 @@ def register_bot_handlers():
                 await callback_query.answer(f"📋 Command: {cmd_text}", show_alert=True)
         elif data == "languages":
             lang_buttons = [
+                [InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")],
                 [
-                    InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
-                    InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
+                    InlineKeyboardButton("🇮🇹 Italiano", callback_data="lang_it"),
+                    InlineKeyboardButton("🇪🇸 Español", callback_data="lang_es")
                 ],
                 [
-                    InlineKeyboardButton("🇮🇳 हिन्दी", callback_data="lang_hi"),
-                    InlineKeyboardButton("🇵🇰 اردو", callback_data="lang_ur")
+                    InlineKeyboardButton("🇧🇷🇵🇹 Português", callback_data="lang_pt"),
+                    InlineKeyboardButton("🇩🇪 Deutsch", callback_data="lang_de")
                 ],
                 [
-                    InlineKeyboardButton("🇪🇸 Español", callback_data="lang_es"),
-                    InlineKeyboardButton("🇫🇷 Français", callback_data="lang_fr")
+                    InlineKeyboardButton("🇫🇷 Français", callback_data="lang_fr"),
+                    InlineKeyboardButton("🇷🇴 Română", callback_data="lang_ro")
                 ],
                 [
-                    InlineKeyboardButton("🇮🇩 Bahasa", callback_data="lang_id"),
+                    InlineKeyboardButton("🇳🇱 Nederlands", callback_data="lang_nl"),
                     InlineKeyboardButton("🇹🇷 Türkçe", callback_data="lang_tr")
                 ],
                 [
-                    InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
-                    InlineKeyboardButton("🇧🇷 Português", callback_data="lang_pt")
+                    InlineKeyboardButton("🇨🇳 简体中文", callback_data="lang_zh"),
+                    InlineKeyboardButton("🇨🇳 繁體中文", callback_data="lang_zt")
+                ],
+                [
+                    InlineKeyboardButton("🇺🇦 Українська", callback_data="lang_uk"),
+                    InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru")
+                ],
+                [
+                    InlineKeyboardButton("🇰🇿 Қазақ", callback_data="lang_kk"),
+                    InlineKeyboardButton("🇮🇩 Indonesia", callback_data="lang_id")
+                ],
+                [
+                    InlineKeyboardButton("🇺🇿 O'zbekcha", callback_data="lang_uz"),
+                    InlineKeyboardButton("🇺🇿 Ўзбекча", callback_data="lang_uzc")
+                ],
+                [
+                    InlineKeyboardButton("🇦🇿 Azərbaycanca", callback_data="lang_az"),
+                    InlineKeyboardButton("🇲🇾 Melayu", callback_data="lang_ms")
+                ],
+                [
+                    InlineKeyboardButton("🇸🇴 Soomaali", callback_data="lang_so"),
+                    InlineKeyboardButton("🇦🇱 Shqipe", callback_data="lang_sq")
+                ],
+                [
+                    InlineKeyboardButton("🇷🇸 Srpski", callback_data="lang_sr"),
+                    InlineKeyboardButton("🇪🇹 Amharic", callback_data="lang_am")
+                ],
+                [
+                    InlineKeyboardButton("🇬🇷 Ελληνικά", callback_data="lang_el"),
+                    InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
+                ],
+                [
+                    InlineKeyboardButton("🇰🇷 한국어", callback_data="lang_ko"),
+                    InlineKeyboardButton("🇮🇷 پارسی", callback_data="lang_fa")
+                ],
+                [
+                    InlineKeyboardButton("☀️ کوردی", callback_data="lang_ku"),
+                    InlineKeyboardButton("🇮🇳 हिन्दी", callback_data="lang_hi")
+                ],
+                [
+                    InlineKeyboardButton("🇱🇰 සිංහල", callback_data="lang_si"),
+                    InlineKeyboardButton("🇧🇩 বাংলা", callback_data="lang_bn")
+                ],
+                [
+                    InlineKeyboardButton("🇵🇰 اردو", callback_data="lang_ur"),
+                    InlineKeyboardButton("🇮🇱 עברית", callback_data="lang_he")
                 ],
                 [InlineKeyboardButton("🔙 Back", callback_data="back_main")]
             ]
             
             await safe_edit_message(
                 callback_query.message,
-                "🇬🇧 <b>Languages</b> 🇬🇧\n\n"
-                "👇 Apni language select karo:",
+                "🇬🇧 <b>Choose your language</b>\n"
+                "🇮🇹 Scegli la tua lingua",
                 reply_markup=InlineKeyboardMarkup(lang_buttons),
                 parse_mode="html"
             )
             await callback_query.answer()
         elif data.startswith("lang_"):
             lang_map = {
-                "lang_en": "🇬🇧 English",
-                "lang_ar": "🇸🇦 العربية (Arabic)",
-                "lang_hi": "🇮🇳 हिन्दी (Hindi)",
-                "lang_ur": "🇵🇰 اردو (Urdu)",
-                "lang_es": "🇪🇸 Español (Spanish)",
-                "lang_fr": "🇫🇷 Français (French)",
-                "lang_id": "🇮🇩 Bahasa (Indonesian)",
-                "lang_tr": "🇹🇷 Türkçe (Turkish)",
-                "lang_ru": "🇷🇺 Русский (Russian)",
-                "lang_pt": "🇧🇷 Português (Portuguese)"
+                "lang_en": ("🇬🇧 English", "en"),
+                "lang_it": ("🇮🇹 Italiano", "it"),
+                "lang_es": ("🇪🇸 Español", "es"),
+                "lang_pt": ("🇧🇷 Português", "pt"),
+                "lang_de": ("🇩🇪 Deutsch", "de"),
+                "lang_fr": ("🇫🇷 Français", "fr"),
+                "lang_ro": ("🇷🇴 Română", "ro"),
+                "lang_nl": ("🇳🇱 Nederlands", "nl"),
+                "lang_tr": ("🇹🇷 Türkçe", "tr"),
+                "lang_zh": ("🇨🇳 简体中文", "zh"),
+                "lang_zt": ("🇨🇳 繁體中文", "zt"),
+                "lang_uk": ("🇺🇦 Українська", "uk"),
+                "lang_ru": ("🇷🇺 Русский", "ru"),
+                "lang_kk": ("🇰🇿 Қазақ", "kk"),
+                "lang_id": ("🇮🇩 Indonesia", "id"),
+                "lang_uz": ("🇺🇿 O'zbekcha", "uz"),
+                "lang_uzc": ("🇺🇿 Ўзбекча", "uzc"),
+                "lang_az": ("🇦🇿 Azərbaycanca", "az"),
+                "lang_ms": ("🇲🇾 Melayu", "ms"),
+                "lang_so": ("🇸🇴 Soomaali", "so"),
+                "lang_sq": ("🇦🇱 Shqipe", "sq"),
+                "lang_sr": ("🇷🇸 Srpski", "sr"),
+                "lang_am": ("🇪🇹 Amharic", "am"),
+                "lang_el": ("🇬🇷 Ελληνικά", "el"),
+                "lang_ar": ("🇸🇦 العربية", "ar"),
+                "lang_ko": ("🇰🇷 한국어", "ko"),
+                "lang_fa": ("🇮🇷 پارسی", "fa"),
+                "lang_ku": ("☀️ کوردی", "ku"),
+                "lang_hi": ("🇮🇳 हिन्दी", "hi"),
+                "lang_si": ("🇱🇰 සිංහල", "si"),
+                "lang_bn": ("🇧🇩 বাংলা", "bn"),
+                "lang_ur": ("🇵🇰 اردو", "ur"),
+                "lang_he": ("🇮🇱 עברית", "he"),
             }
-            selected = lang_map.get(data, "Unknown")
-            await callback_query.answer(f"✅ Language selected: {selected}\n\nAbhi sirf English available hai. Jald hi aur languages add hongi!", show_alert=True)
+            info = lang_map.get(data)
+            if info:
+                lang_name, lang_code = info
+                user_id = callback_query.from_user.id
+                user_languages[user_id] = lang_code
+                await callback_query.answer(f"✅ {lang_name} selected!", show_alert=True)
         elif data.startswith("hcmd_"):
             hcmd_map = {
                 "hcmd_start": "/start",
