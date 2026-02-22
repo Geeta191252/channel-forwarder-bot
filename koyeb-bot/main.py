@@ -3222,7 +3222,6 @@ def register_bot_handlers():
                 "Bot group ke sab members ko blue tick mention ke sath tag karega.",
                 show_alert=True
             )
-                )
         elif data == "moderation":
             # Verify user access
             if not await verify_user_access(callback_query, client):
